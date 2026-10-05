@@ -36,14 +36,14 @@ object ZChannel {
    */
   val DefaultShutdownAwait = 15.seconds
 
-  def create[T <: ManagedChannelBuilder[T]](
-    builder: ManagedChannelBuilder[T],
+  def create(
+    builder: ManagedChannelBuilder[?],
   )(using Trace): ZIO[Scope, Throwable, ZChannel] = {
     createWithInterceptors(builder, Nil)
   }
 
-  def createWithInterceptors[T <: ManagedChannelBuilder[T]](
-    builder: ManagedChannelBuilder[T],
+  def createWithInterceptors(
+    builder: ManagedChannelBuilder[?],
     interceptors: List[ZClientInterceptor],
   )(using Trace): ZIO[Scope, Throwable, ZChannel] = for {
     b <- ZChannel.setExecutors(builder)
@@ -53,15 +53,15 @@ object ZChannel {
     }
   } yield new ZChannel(channel, interceptors)
 
-  def setExecutors[T <: ManagedChannelBuilder[T]](
-    builder: ManagedChannelBuilder[T],
-  )(using Trace): ZIO[Any, Nothing, T] = for {
+  def setExecutors(
+    builder: ManagedChannelBuilder[?],
+  )(using Trace): ZIO[Any, Nothing, ManagedChannelBuilder[?]] = for {
     executor <- ZIO.executor
     blockingExecutor <- ZIO.blockingExecutor
   } yield {
+    val _ = builder.executor(executor.asJava)
+    val _ = builder.offloadExecutor(blockingExecutor.asJava)
     builder
-      .executor(executor.asJava)
-      .offloadExecutor(blockingExecutor.asJava)
   }
 
   def shutdown(channel: ManagedChannel, await: Duration)(using Trace): ZIO[Any, Throwable, Boolean] = for {

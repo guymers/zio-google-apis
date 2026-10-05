@@ -23,7 +23,6 @@ object SecretManagerSecretIntegrationTest extends GoogleIntegrationTest {
   override val spec = suite("SecretManager")(
     test("create, add version, access version") {
       for {
-        auth <- ZIO.service[SecretManagerAuthentication]
         client <- ZIO.service[SecretManagerClient]
         projectId <- ZIO.service[GoogleCloudProjectId]
 
@@ -31,7 +30,7 @@ object SecretManagerSecretIntegrationTest extends GoogleIntegrationTest {
         name = s"$parent/secrets/$SecretId"
         data = s"zga-test-${java.util.UUID.randomUUID()}"
 
-        secret <- client.getSecret(auth, GetSecretRequest(name)).catchSome {
+        secret <- client.getSecret(GetSecretRequest(name)).catchSome {
           case _: zga.error.Error.NotFound =>
             val create = CreateSecretRequest(
               parent = parent,
@@ -42,16 +41,16 @@ object SecretManagerSecretIntegrationTest extends GoogleIntegrationTest {
                 ),
               )),
             )
-            client.createSecret(auth, create)
+            client.createSecret(create)
         }
         version <- {
           val req = AddSecretVersionRequest(
             parent = secret.name,
             payload = Some(SecretPayload(ByteString.copyFromUtf8(data))),
           )
-          client.addSecretVersion(auth, req)
+          client.addSecretVersion(req)
         }
-        accessed <- client.accessSecretVersion(auth, AccessSecretVersionRequest(version.name))
+        accessed <- client.accessSecretVersion(AccessSecretVersionRequest(version.name))
       } yield {
         assertTrue(secret.name == name) &&
         assertTrue(version.name.startsWith(s"$name/versions/")) &&
@@ -62,5 +61,6 @@ object SecretManagerSecretIntegrationTest extends GoogleIntegrationTest {
 
   private def clientLayer = ZLayer.fromZIOEnvironment(for {
     channel <- ZIO.service[SecretManagerChannel]
-  } yield ZEnvironment.empty.add(SecretManagerClient.create(channel, io.grpc.CallOptions.DEFAULT)))
+    auth <- ZIO.service[SecretManagerAuthentication]
+  } yield ZEnvironment.empty.add(SecretManagerClient.create(channel, auth, io.grpc.CallOptions.DEFAULT)))
 }

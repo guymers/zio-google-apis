@@ -28,19 +28,18 @@ object CloudRunJobIntegrationTest extends GoogleIntegrationTest {
   override val spec = suite("CloudRunJob")(
     test("can run a job") {
       for {
-        auth <- ZIO.service[CloudRunAuthentication]
         client <- ZIO.service[JobsClient]
         projectId <- ZIO.service[GoogleCloudProjectId]
 
         jobs <- {
           val req = ListJobsRequest(s"projects/$projectId/locations/us-west1")
-          client.listJobs(auth, req)
+          client.listJobs(req)
         }
         job = jobs.jobs.find(_.name.endsWith("/zga-test-job"))
 
         op <- {
           val req = RunJobRequest(job.get.name)
-          client.runJob(auth, req)
+          client.runJob(req)
         }
         result <- poll(op).runCollect.either
       } yield {
@@ -54,9 +53,10 @@ object CloudRunJobIntegrationTest extends GoogleIntegrationTest {
 
   private def jobClientLayer = ZLayer.fromZIOEnvironment(for {
     channel <- ZIO.service[CloudRunChannel]
+    auth <- ZIO.service[CloudRunAuthentication]
     options = io.grpc.CallOptions.DEFAULT
-    client = JobsClient.create(channel, options)
-    operationsClient = OperationsClient.create(channel, options)
+    client = JobsClient.create(channel, auth, options)
+    operationsClient = OperationsClient.create(channel, auth, options)
   } yield ZEnvironment.empty.add(client).add(operationsClient))
 
   private def poll(op: Operation) = {
@@ -102,17 +102,15 @@ object CloudRunJobIntegrationTest extends GoogleIntegrationTest {
   }
 
   private def get(name: String) = for {
-    auth <- ZIO.service[CloudRunAuthentication]
     operationsClient <- ZIO.service[OperationsClient]
     request = GetOperationRequest(name)
-    result <- operationsClient.getOperation(auth, request)
+    result <- operationsClient.getOperation(request)
   } yield result
 
   private def cancel(name: String) = for {
-    auth <- ZIO.service[CloudRunAuthentication]
     operationsClient <- ZIO.service[OperationsClient]
     request = CancelOperationRequest(name)
-    result <- operationsClient.cancelOperation(auth, request)
+    result <- operationsClient.cancelOperation(request)
   } yield result
 
   sealed abstract class Result
