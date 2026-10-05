@@ -66,7 +66,7 @@ lazy val root = project.in(file("."))
   .settings(noPublishSettings)
   .aggregate(codegen)
   .aggregate(shared, sharedIT, common, iam)
-  .aggregate(analytics, cloudErrorReporting, cloudKms, cloudRun, cloudTrace, merchant, secretManager, storage)
+  .aggregate(ads, analytics, cloudErrorReporting, cloudKms, cloudRun, cloudTrace, merchant, secretManager, storage)
   // note not including client IT projects so `test` does not consider them
   .disablePlugins(MimaPlugin)
 
@@ -168,6 +168,8 @@ def client(name: String, classPrefix: String, pkgName: String) = {
 }
 def clientIT(name: String) = itProject(name, directory = Some("clients"))
   .dependsOn(sharedIT % "test->test")
+
+lazy val ads = client("ads", classPrefix = "Ads", pkgName = "ads")
 
 lazy val analytics = client("analytics", classPrefix = "Analytics", pkgName = "analytics")
 

@@ -3,6 +3,7 @@ package zga.codegen
 import com.google.protobuf.Descriptors
 
 import scala.collection.immutable.ListMap
+import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
 
 object Generator {
@@ -196,76 +197,192 @@ object Generator {
       |""".stripMargin
   }
 
+  /**
+   * The JVM limits a method's parameter list to 254 slots, and a `Long` or a
+   * `Double` takes two. A message over the limit is generated as consecutive
+   * chunks, each small enough to be one case class, and the message exports the
+   * chunks' fields so they read as if the message were one case class. The
+   * message's codec flattens the chunks back onto the same proto fields.
+   */
+  private val MaxParameterSlots = 254
+
+  private def isDoubleSlot(f: Descriptors.FieldDescriptor) = {
+    !f.isCollection &&
+    !f.hasPresence &&
+    (f.getJavaType match {
+      case Descriptors.FieldDescriptor.JavaType.LONG | Descriptors.FieldDescriptor.JavaType.DOUBLE => true
+      case _ => false
+    })
+  }
+
+  private def parameterSlots(f: Descriptors.FieldDescriptor) = if (isDoubleSlot(f)) 2 else 1
+
+  private enum MessageMember {
+    case Field(field: Descriptors.FieldDescriptor)
+    case Oneof(oneof: Descriptors.OneofDescriptor)
+    case Group(name: String, parameterName: String, members: List[MessageMember])
+
+    def scalaName: String = this match {
+      case Field(field) => field.scalaName
+      case Oneof(oneof) => oneof.scalaName
+      case Group(_, parameterName, _) => parameterName
+    }
+
+    def slots: Int = this match {
+      case Field(field) => parameterSlots(field)
+      case _ => 1
+    }
+
+    def hasDefault: Boolean = this match {
+      case Field(field) => !(field.isMarkedRequired && !field.isCollection)
+      case Oneof(oneof) => !oneof.isMarkedRequired
+      case Group(_, _, members) => members.forall(_.hasDefault)
+    }
+
+    def comment: Option[String] = this match {
+      case Field(field) => field.comment
+      case Oneof(oneof) => oneof.comment
+      case Group(name, _, _) => Some(s"Fields in $name.")
+    }
+  }
+
+  private def printParameter(m: Descriptors.Descriptor, member: MessageMember): List[String] = {
+    val (scalaType, defaultValue, deprecated) = member match {
+      case MessageMember.Field(field) => (field.scalaTypeName, field.scalaDefaultValue, field.getOptions.getDeprecated)
+      case MessageMember.Oneof(oneof) => (s"_root_.scala.Option[${oneof.scalaType}]", "_root_.scala.None", false)
+      case MessageMember.Group(name, _, _) => (s"${m.scalaType}.$name", s"${m.scalaType}.$name()", false)
+    }
+    val default = if (member.hasDefault) s" = $defaultValue" else ""
+    List(
+      Option.when(deprecated)(deprecatedAnnotation),
+      Some(s"${Utils.escapeScalaKeyword(member.scalaName)}: $scalaType$default,"),
+    ).flatten
+  }
+
   private def printMessage(m: Descriptors.Descriptor): String = {
     validateFieldNames(m)
+    val parameters = messageLayout(m)
+    val companionMembers =
+      realOneofs(m).map(printOneof(_)) ++
+        m.getEnumTypes.asScala.map(printEnum(_)) ++
+        m.getNestedTypes.asScala.filterNot(_.getOptions.getMapEntry).map(printMessage(_)) ++
+        groups(parameters).map { group =>
+          printProduct(
+            m = m,
+            name = group.name,
+            parameters = group.members,
+            comment = s"Fields of ${m.getName} in ${group.name}.",
+            deprecated = false,
+            companionMembers = List(printProductCodec(m, s"${m.scalaType}.${group.name}", isGroup = true)),
+          )
+        } ++
+        List(printProductCodec(m, m.scalaType, isGroup = false))
+    printProduct(
+      m = m,
+      name = Utils.escapeScalaKeyword(m.getName),
+      parameters = parameters,
+      comment = m.comment.getOrElse(m.getName),
+      deprecated = m.getOptions.getDeprecated,
+      companionMembers = companionMembers,
+    )
+  }
 
-    def printField(f: Descriptors.FieldDescriptor) = List(
-      Option(f.getOptions.getDeprecated).filter(identity(_)).map(_ => deprecatedAnnotation),
-      Some {
-        val default =
-          if (f.isMarkedRequired && !f.isCollection) "" else s" = ${f.scalaDefaultValue}"
-        s"${Utils.escapeScalaKeyword(f.scalaName)}: ${f.scalaTypeName}$default,"
-      },
-    ).flatten
-
-    def printOneofParam(o: Descriptors.OneofDescriptor) = {
-      val default = if (o.isMarkedRequired) "" else " = _root_.scala.None"
-      List(s"${Utils.escapeScalaKeyword(o.scalaName)}: _root_.scala.Option[${o.scalaType}]$default,")
-    }
-
-    val messageName = Utils.escapeScalaKeyword(m.getName)
-    val oneofs = realOneofs(m)
-    val members = messageMembers(m)
-
-    val scaladoc = {
-      val comment = m.comment.getOrElse(m.getName)
-      val params = members.flatMap {
-        case Left(f) => f.comment.map(Utils.escapeScalaKeyword(f.scalaName) -> _)
-        case Right(o) => o.comment.map(Utils.escapeScalaKeyword(o.scalaName) -> _)
-      }.to(ListMap)
-      Comments.formatAsScaladoc(comment, params)
-    }
-
+  private def printProduct(
+    m: Descriptors.Descriptor,
+    name: String,
+    parameters: List[MessageMember],
+    comment: String,
+    deprecated: Boolean,
+    companionMembers: Seq[String],
+  ): String = {
+    val params = parameters.flatMap(member => member.comment.map(Utils.escapeScalaKeyword(member.scalaName) -> _)).to(ListMap)
     val memberDoc = List(
-      Some(scaladoc),
-      Option(m.getOptions.getDeprecated).filter(identity(_)).map(_ => deprecatedAnnotation),
+      Some(Comments.formatAsScaladoc(comment, params)),
+      Option.when(deprecated)(deprecatedAnnotation),
     ).flatten.mkString("\n")
-
-    val parameters = members.flatMap {
-      case Left(f) => printField(f)
-      case Right(o) => printOneofParam(o)
+    val exports = parameters.collect { case MessageMember.Group(_, parameterName, _) =>
+      s"  export ${Utils.escapeScalaKeyword(parameterName)}.*"
     }
-
+    val body = if (exports.isEmpty) "" else exports.mkString(" {\n", "\n", "\n}")
     s"""
-      |${memberDoc}
-      |case class $messageName(
-      |  ${parameters.mkString("\n  ")}
-      |)
-      |object $messageName {
-      |${oneofs.map(printOneof(_)).mkString("\n")}
-      |${m.getEnumTypes.asScala.map(printEnum(_)).mkString("\n")}
-      |${m.getNestedTypes.asScala.filterNot(_.getOptions.getMapEntry).map(printMessage(_)).mkString("\n")}
-      |${printMessageCodec(m)}
+      |$memberDoc
+      |case class $name(
+      |  ${parameters.flatMap(printParameter(m, _)).mkString("\n  ")}
+      |)$body
+      |object $name {
+      |${companionMembers.mkString("\n")}
       |}
       |""".stripMargin
+  }
+
+  private def groups(parameters: List[MessageMember]): List[MessageMember.Group] = parameters.flatMap {
+    case group: MessageMember.Group => group :: groups(group.members)
+    case _ => Nil
+  }
+
+  /**
+   * Fit every constructor to the JVM limit, including oneofs and any groups of
+   * groups.
+   */
+  private def messageLayout(m: Descriptors.Descriptor): List[MessageMember] = {
+    val usedTypes = mutable.Set.empty[String] ++
+      m.getEnumTypes.asScala.map(_.getName) ++
+      m.getNestedTypes.asScala.filterNot(_.getOptions.getMapEntry).map(_.getName) ++
+      realOneofs(m).map(_.scalaTypeName) ++ List(m.getName)
+    val usedParameters = mutable.Set.empty[String] ++ m.fields.map(_.scalaName) ++ realOneofs(m).map(_.scalaName)
+
+    def uniqueName(base: String, used: mutable.Set[String]): String = {
+      var name = base
+      while (used.contains(name)) name += "Group"
+      used += name
+      name
+    }
+
+    var groupIndex = 0
+    def fit(members: List[MessageMember]): List[MessageMember] = {
+      if (members.map(_.slots).sum <= MaxParameterSlots) members
+      else {
+        val grouped = chunkBySlots(members).map { chunk =>
+          groupIndex += 1
+          val name = uniqueName(s"Part$groupIndex", usedTypes)
+          val parameterName = uniqueName(name.head.toLower.toString + name.tail, usedParameters)
+          MessageMember.Group(name = name, parameterName = parameterName, members = chunk)
+        }
+        fit(grouped)
+      }
+    }
+    fit(messageMembers(m))
+  }
+
+  private def chunkBySlots(members: List[MessageMember]): List[List[MessageMember]] = {
+    val chunks = mutable.ListBuffer.empty[List[MessageMember]]
+    val current = mutable.ListBuffer.empty[MessageMember]
+    var slots = 0
+    members.foreach { member =>
+      if (current.nonEmpty && slots + member.slots > MaxParameterSlots) {
+        chunks += current.toList
+        current.clear()
+        slots = 0
+      }
+      current += member
+      slots += member.slots
+    }
+    if (current.nonEmpty) chunks += current.toList
+    chunks.toList
   }
 
   private def realOneofs(m: Descriptors.Descriptor) = m.getRealOneofs.asScala.toList
 
   /**
-   * A message's generated case class parameters in declaration order: each
-   * field that is not in a oneof, and each oneof, positioned at its first
-   * field.
+   * Fields and real oneofs in declaration order, each oneof positioned at its
+   * first field.
    */
-  private def messageMembers(
-    m: Descriptors.Descriptor,
-  ): List[Either[Descriptors.FieldDescriptor, Descriptors.OneofDescriptor]] = {
-    val emitted = scala.collection.mutable.Set.empty[Int]
+  private def messageMembers(m: Descriptors.Descriptor): List[MessageMember] = {
+    val emitted = mutable.Set.empty[Int]
     m.fields.toList.flatMap { field =>
-      type Member = Either[Descriptors.FieldDescriptor, Descriptors.OneofDescriptor]
       Option(field.getRealContainingOneof) match {
-        case None => Some(Left(field): Member)
-        case Some(oneof) => Option.when(emitted.add(oneof.getIndex))(Right(oneof): Member)
+        case None => Some(MessageMember.Field(field))
+        case Some(oneof) => Option.when(emitted.add(oneof.getIndex))(MessageMember.Oneof(oneof))
       }
     }
   }
@@ -377,10 +494,11 @@ object Generator {
     }
   }
 
-  private def printMessageCodec(m: Descriptors.Descriptor): String = {
-    val scalaType = m.scalaType
-    s"""given messageCodec: _root_.zga.common.MessageCodec[$scalaType] =
-      |  _root_.zga.common.MessageCodec.derived[$scalaType](${messageDescriptorRef(m)})""".stripMargin
+  private def printProductCodec(m: Descriptors.Descriptor, scalaType: String, isGroup: Boolean): String = {
+    val codec = if (isGroup) "MessageGroupCodec" else "MessageCodec"
+    val name = if (isGroup) "groupCodec" else "messageCodec"
+    s"""given $name: _root_.zga.common.$codec[$scalaType] =
+      |  _root_.zga.common.$codec.derived[$scalaType](${messageDescriptorRef(m)})""".stripMargin
   }
 
   private def messageDescriptorRef(m: Descriptors.Descriptor): String = {
