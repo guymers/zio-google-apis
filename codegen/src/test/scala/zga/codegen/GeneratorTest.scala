@@ -302,8 +302,8 @@ object GeneratorTest extends ZIOSpecDefault {
       test("derives the codec from a codec per case") {
         val output = generateOneof(List(oneofField("error", 1, 0), oneofField("response", 2, 0)), List("result"))
         assertTrue(output.contains("_root_.zga.common.OneofCodec.derived[_root_.test.Message.Result](")) &&
-        assertTrue(output.contains("_root_.zga.common.OneofCaseCodec.derived[_root_.test.Message.Result.Error](1)")) &&
-        assertTrue(output.contains("_root_.zga.common.OneofCaseCodec.derived[_root_.test.Message.Result.Response](2)"))
+        assertTrue(output.contains("_root_.zga.common.OneofCodec.Case.derived[_root_.test.Message.Result.Error](1)")) &&
+        assertTrue(output.contains("_root_.zga.common.OneofCodec.Case.derived[_root_.test.Message.Result.Response](2)"))
       },
       test("does not generate a parameter per member field") {
         val output = generateOneof(List(oneofField("error", 1, 0), oneofField("response", 2, 0)), List("result"))
@@ -332,6 +332,10 @@ object GeneratorTest extends ZIOSpecDefault {
       test("converts a snake_case oneof name") {
         val output = generateOneof(List(oneofField("a", 1, 0)), List("value_type"))
         assertTrue(output.contains("valueType: _root_.scala.Option[_root_.test.Message.ValueType]"))
+      },
+      test("escapes a keyword oneof name") {
+        val output = generateOneof(List(oneofField("fixed_fee", 1, 0)), List("type"))
+        assertTrue(output.contains("  `type`: _root_.scala.Option[_root_.test.Message.Type] = _root_.scala.None,"))
       },
       test("treats a proto3 optional field as an optional field") {
         val field = FieldDescriptorProto.newBuilder(stringField(name = "name", number = 1))

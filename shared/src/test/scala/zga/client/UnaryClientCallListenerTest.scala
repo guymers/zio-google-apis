@@ -63,7 +63,7 @@ object UnaryClientCallListenerTest extends ZIOSpecDefault {
   private final class DyingCancelZClientCall extends ZClientCall[String, String] {
     override def start(listener: ClientCall.Listener[String], headers: SafeMetadata)(using Trace) = ZIO.unit
     override def request(numMessages: Int)(using Trace) = ZIO.unit
-    override def cancel(message: String)(using Trace): ZIO[Any, Status, Unit] = ZIO.die(new RuntimeException("cancel failed"))
+    override def cancel(message: String)(using Trace) = ZIO.die(new RuntimeException("cancel failed"))
     override def isReady(using Trace) = ZIO.succeed(true)
     override def halfClose()(using Trace) = ZIO.unit
     override def sendMessage(message: String)(using Trace) = ZIO.unit

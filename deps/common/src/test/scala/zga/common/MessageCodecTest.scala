@@ -98,9 +98,14 @@ object MessageCodecTest extends ZIOSpecDefault {
       val value = Value(kind = None)
       assertTrue(roundTrip(value) == value)
     },
+    test("a oneof case whose field number the oneof does not contain fails instead of encoding an unrelated field") {
+      val oneof = summon[MessageCodec[Value]].descriptor.findFieldByName("string_value").getContainingOneof
+      val bogus = OneofCodec.Case.derived[Value.Kind.StringValue](999)
+      assertTrue(Try(bogus.encode(oneof, Value.Kind.StringValue("value"))).isFailure)
+    },
     test("grpc marshaller") {
       val value = Duration(seconds = 42L, nanos = 1)
-      val marshaller = MessageCodec.forMessage[Duration]
+      val marshaller = MessageCodec.marshaller[Duration]
       assertTrue(marshaller.parse(marshaller.stream(value)) == value)
     },
     test("a codec whose parameter matches no descriptor field fails instead of dropping fields") {

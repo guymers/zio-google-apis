@@ -181,8 +181,8 @@ object ZioGrpcGenerator {
       |    .setType($MethodDescriptorType.MethodType.$methodType)
       |    .setFullMethodName($MethodDescriptorType.generateFullMethodName("${service.getFullName}", "${method.getName}"))
       |    .setSampledToLocalTracing(true)
-      |    .setRequestMarshaller($MessageCodec.forMessage[$in])
-      |    .setResponseMarshaller($MessageCodec.forMessage[$out])
+      |    .setRequestMarshaller($MessageCodec.marshaller[$in])
+      |    .setResponseMarshaller($MessageCodec.marshaller[$out])
       |    .build()
       |""".stripMargin
   }

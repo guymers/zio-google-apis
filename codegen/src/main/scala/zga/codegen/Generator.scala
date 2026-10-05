@@ -210,7 +210,7 @@ object Generator {
 
     def printOneofParam(o: Descriptors.OneofDescriptor) = {
       val default = if (o.isMarkedRequired) "" else " = _root_.scala.None"
-      List(s"${o.scalaName}: _root_.scala.Option[${o.scalaType}]$default,")
+      List(s"${Utils.escapeScalaKeyword(o.scalaName)}: _root_.scala.Option[${o.scalaType}]$default,")
     }
 
     val messageName = Utils.escapeScalaKeyword(m.getName)
@@ -283,7 +283,7 @@ object Generator {
     }
 
     val caseCodecs = fields.map { field =>
-      s"_root_.zga.common.OneofCaseCodec.derived[$oneofType.${field.oneofCaseName}](${field.getNumber})"
+      s"_root_.zga.common.OneofCodec.Case.derived[$oneofType.${field.oneofCaseName}](${field.getNumber})"
     }
 
     s"""
