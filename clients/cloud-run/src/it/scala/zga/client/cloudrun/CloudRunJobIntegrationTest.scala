@@ -2,8 +2,8 @@ package zga.client.cloudrun
 
 import zga.client.cloudrun.auth.CloudRunAuthentication
 import zga.common.MessageCodec
-import zga.google.cloud.run.v2.ListJobsRequest
-import zga.google.cloud.run.v2.RunJobRequest
+import zga.google.cloud.run.ListJobsRequest
+import zga.google.cloud.run.RunJobRequest
 import zga.google.longrunning.CancelOperationRequest
 import zga.google.longrunning.GetOperationRequest
 import zga.google.longrunning.Operation
@@ -78,7 +78,7 @@ object CloudRunJobIntegrationTest extends GoogleIntegrationTest {
             case Some(Operation.Result.Error(status)) =>
               Exit.failCause(zga.error.Error.fromRpcStatus(status)).mapError(Result.Error(_))
             case Some(Operation.Result.Response(any)) =>
-              MessageCodec[zga.google.cloud.run.v2.Execution].safeParseFrom(any.value) match {
+              MessageCodec[zga.google.cloud.run.Execution].safeParseFrom(any.value) match {
                 case Left(t) =>
                   val e = zga.error.Error.Unknown(
                     description = None,
@@ -119,6 +119,6 @@ object CloudRunJobIntegrationTest extends GoogleIntegrationTest {
   object Result {
     sealed trait Complete extends Result
     case class Error(error: zga.error.Error) extends Complete
-    case class Success(value: zga.google.cloud.run.v2.Execution) extends Complete
+    case class Success(value: zga.google.cloud.run.Execution) extends Complete
   }
 }

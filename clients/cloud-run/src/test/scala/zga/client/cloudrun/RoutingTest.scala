@@ -2,11 +2,11 @@ package zga.client.cloudrun
 
 import zga.client.Routing
 import zga.client.SafeMetadata
-import zga.google.cloud.run.v2.CreateJobRequest
-import zga.google.cloud.run.v2.GetExecutionRequest
-import zga.google.cloud.run.v2.GetJobRequest
-import zga.google.cloud.run.v2.Job
-import zga.google.cloud.run.v2.UpdateJobRequest
+import zga.google.cloud.run.CreateJobRequest
+import zga.google.cloud.run.GetExecutionRequest
+import zga.google.cloud.run.GetJobRequest
+import zga.google.cloud.run.Job
+import zga.google.cloud.run.UpdateJobRequest
 import zio.test.ZIOSpecDefault
 import zio.test.assertTrue
 
