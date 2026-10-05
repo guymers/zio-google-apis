@@ -49,14 +49,14 @@ object Operation {
 
     given oneofCodec: zga.common.OneofCodec[Result] =
       zga.common.OneofCodec.derived[Result](
-        zga.common.OneofCaseCodec.derived[Result.Error](4),
-        zga.common.OneofCaseCodec.derived[Result.Response](5),
+        zga.common.OneofCodec.Case.derived[Result.Error](4),
+        zga.common.OneofCodec.Case.derived[Result.Response](5),
       )
   }
 }
 ```
 
-`None` is a oneof with no member set, which is distinct from a member set to its default value. `OneofCodec.derived` dispatches on the `Mirror.SumOf` of the cases, and each `OneofCaseCodec` derives its value codec from the case's `Mirror.ProductOf`, so the generator only names the cases and their field numbers.
+`None` is a oneof with no member set, which is distinct from a member set to its default value. `OneofCodec.derived` dispatches on the `Mirror.SumOf` of the cases, and each `OneofCodec.Case` derives its value codec from the case's `Mirror.ProductOf`, so the generator only names the cases and their field numbers.
 
 A oneof is never `required` in protobuf and has no options of its own, so a required oneof cannot be declared directly. As with a required field, a required oneof drops its `None` default. The generator treats a oneof as required when every member that is not deprecated carries `(google.api.field_behavior) = REQUIRED`; a deprecated member is ignored, and a lone required member among many does not make the oneof required.
 

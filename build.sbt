@@ -66,7 +66,7 @@ lazy val root = project.in(file("."))
   .settings(noPublishSettings)
   .aggregate(codegen)
   .aggregate(shared, sharedIT, common, iam)
-  .aggregate(cloudRun)
+  .aggregate(analytics, cloudErrorReporting, cloudKms, cloudRun, cloudTrace, merchant, secretManager, storage)
   // note not including client IT projects so `test` does not consider them
   .disablePlugins(MimaPlugin)
 
@@ -161,18 +161,36 @@ def client(name: String, classPrefix: String, pkgName: String) = {
     ))
     .settings(protoPlugin(Map("class_prefix" -> classPrefix, "pkg_name" -> pkgName)))
     .enablePlugins(ProtobufPlugin)
+    .dependsOn(
+      shared,
+      common % "compile->compile;protobuf->protobuf",
+    )
 }
 def clientIT(name: String) = itProject(name, directory = Some("clients"))
   .dependsOn(sharedIT % "test->test")
 
+lazy val analytics = client("analytics", classPrefix = "Analytics", pkgName = "analytics")
+
+lazy val cloudErrorReporting = client("cloud-error-reporting", classPrefix = "CloudErrorReporting", pkgName = "clouderrorreporting")
+
+lazy val cloudKms = client("cloud-kms", classPrefix = "CloudKms", pkgName = "cloudkms")
+
 lazy val cloudRun = client("cloud-run", classPrefix = "CloudRun", pkgName = "cloudrun")
-  .dependsOn(
-    shared,
-    common % "compile->compile;protobuf->protobuf",
-    iam % "compile->compile;protobuf->protobuf",
-  )
+  .dependsOn(iam % "compile->compile;protobuf->protobuf")
 lazy val cloudRunIT = clientIT("cloud-run")
   .dependsOn(cloudRun)
+
+lazy val cloudTrace = client("cloud-trace", classPrefix = "CloudTrace", pkgName = "cloudtrace")
+
+lazy val merchant = client("merchant", classPrefix = "Merchant", pkgName = "merchant")
+
+lazy val secretManager = client("secret-manager", classPrefix = "SecretManager", pkgName = "secretmanager")
+  .dependsOn(iam % "compile->compile;protobuf->protobuf")
+lazy val secretManagerIT = clientIT("secret-manager")
+  .dependsOn(secretManager)
+
+lazy val storage = client("storage", classPrefix = "Storage", pkgName = "storage")
+  .dependsOn(iam % "compile->compile;protobuf->protobuf")
 
 lazy val shared = project.in(file("shared"))
   .settings(moduleName := "zga-shared")

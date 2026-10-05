@@ -9,7 +9,7 @@ final class CloudRunChannel(val channel: ZChannel)
 
 object CloudRunChannel {
 
-  // https://github.com/googleapis/google-cloud-java/blob/v1.77.0/java-run/google-cloud-run/src/main/java/com/google/cloud/run/v2/stub/JobsStubSettings.java#L318
+  // https://github.com/googleapis/google-cloud-java/blob/v1.93.0/java-run/google-cloud-run/src/main/java/com/google/cloud/run/v2/stub/JobsStubSettings.java#L322
   val Host = "run.googleapis.com"
   val Port = 443
 

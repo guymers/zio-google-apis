@@ -9,7 +9,7 @@ import zio.ZIO
 
 object CloudRunAuthentication {
 
-  // https://github.com/googleapis/google-cloud-java/blob/main/java-run/google-cloud-run/src/main/java/com/google/cloud/run/v2/stub/JobsStubSettings.java#L152
+  // https://github.com/googleapis/google-cloud-java/blob/v1.93.0/java-run/google-cloud-run/src/main/java/com/google/cloud/run/v2/stub/JobsStubSettings.java#L157
   val scopes = List(
     "https://www.googleapis.com/auth/cloud-platform",
   )
