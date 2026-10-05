@@ -1,7 +1,7 @@
 package zga.client.cloudrun
 
 import zga.common.MessageCodec
-import zga.google.cloud.run.v2.Condition
+import zga.google.cloud.run.Condition
 import zio.test.Assertion.isLeft
 import zio.test.Assertion.isRight
 import zio.test.TestResultZIOOps
@@ -33,11 +33,11 @@ object EnumTest extends ZIOSpecDefault {
     test("cannot construct an unrecognized value directly") {
       // the valid snippet guards against the others failing for an unrelated reason
       assertZIO(typeCheck(
-        "zga.google.cloud.run.v2.Condition.State.fromValue(99) match { case u: zga.google.cloud.run.v2.Condition.State.Unrecognized => u.value }",
+        "zga.google.cloud.run.Condition.State.fromValue(99) match { case u: zga.google.cloud.run.Condition.State.Unrecognized => u.value }",
       ))(isRight) &&
-      assertZIO(typeCheck("zga.google.cloud.run.v2.Condition.State.Unrecognized(0)"))(isLeft) &&
+      assertZIO(typeCheck("zga.google.cloud.run.Condition.State.Unrecognized(0)"))(isLeft) &&
       assertZIO(typeCheck(
-        "zga.google.cloud.run.v2.Condition.State.fromValue(99) match { case u: zga.google.cloud.run.v2.Condition.State.Unrecognized => u.copy(value = 0) }",
+        "zga.google.cloud.run.Condition.State.fromValue(99) match { case u: zga.google.cloud.run.Condition.State.Unrecognized => u.copy(value = 0) }",
       ))(isLeft)
     },
     test("defaults to the zero value") {

@@ -14,7 +14,7 @@ Generated sources are written to `target/out/jvm/scala-<version>/<project>/src_m
 
 ## Generated code
 
-The package comes from `java_package`, falling back to the proto `package`. `google.*` and `com.google.*` packages are moved under `zga.google` so they cannot clash with Google's own Java classes on the classpath.
+The package comes from `java_package`, falling back to the proto `package`. `google.*` and `com.google.*` packages are moved under `zga.google` so they cannot clash with Google's own Java classes on the classpath, and the API version segment (`v1`, `v2`, `v1beta1`, `v1p1beta1`, ads' `v17`, ...) is dropped, so `google.cloud.secretmanager.v1` generates into `zga.google.cloud.secretmanager`. Generated names therefore do not change when an API moves to a new version.
 
 ### Messages and enums
  For each `.proto` file, `Generator.scala` emits the message case classes and enums, and a `<OuterClassname>Descriptors` object holding the file descriptor. Each message has a `given` `zga.common.MessageCodec`.

@@ -2,13 +2,13 @@ package zga.client.secretmanager
 
 import com.google.protobuf.ByteString
 import zga.client.secretmanager.auth.SecretManagerAuthentication
-import zga.google.cloud.secretmanager.v1.AccessSecretVersionRequest
-import zga.google.cloud.secretmanager.v1.AddSecretVersionRequest
-import zga.google.cloud.secretmanager.v1.CreateSecretRequest
-import zga.google.cloud.secretmanager.v1.GetSecretRequest
-import zga.google.cloud.secretmanager.v1.Replication
-import zga.google.cloud.secretmanager.v1.Secret
-import zga.google.cloud.secretmanager.v1.SecretPayload
+import zga.google.cloud.secretmanager.AccessSecretVersionRequest
+import zga.google.cloud.secretmanager.AddSecretVersionRequest
+import zga.google.cloud.secretmanager.CreateSecretRequest
+import zga.google.cloud.secretmanager.GetSecretRequest
+import zga.google.cloud.secretmanager.Replication
+import zga.google.cloud.secretmanager.Secret
+import zga.google.cloud.secretmanager.SecretPayload
 import zga.test.GoogleCloudProjectId
 import zga.test.GoogleIntegrationTest
 import zio.ZEnvironment
