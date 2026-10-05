@@ -17,8 +17,7 @@ object Comments {
   }
 
   def header(f: FileDescriptor): Option[String] = {
-    // The `syntax`/`edition` declaration is recorded at the same source path in
-    // both proto2/proto3 and editions files, so this covers every syntax.
+    // comments before the `syntax` declaration
     locations(f)
       .get(Seq(FileDescriptorProto.SYNTAX_FIELD_NUMBER))
       .map(l => l.getLeadingDetachedCommentsList.asScala.toList.mkString("\n").trim)
@@ -36,7 +35,7 @@ object Comments {
   }
 
   def formatAsScaladoc(comment: String, params: ListMap[String, String]): String = {
-    val lines = comment.split('\n').map(line => s"  * ${escape(line)}")
+    val lines = if (comment.isEmpty) Array.empty[String] else comment.split('\n').map(line => s"  * ${escape(line)}")
     val paramLines = params.toArray.flatMap { case (param, paramComment) =>
       Array(s"  * @param $param") ++ paramComment.split('\n').map(line => s"  *   ${escape(line)}")
     }

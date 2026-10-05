@@ -3,7 +3,6 @@ package zga.codegen
 import com.google.api.AnnotationsProto
 import com.google.api.FieldBehaviorProto
 import com.google.api.RoutingProto
-import com.google.protobuf.DescriptorProtos.Edition
 import com.google.protobuf.Descriptors
 import com.google.protobuf.ExtensionRegistry
 import com.google.protobuf.compiler.PluginProtos
@@ -56,12 +55,7 @@ object Plugin {
     val fileDescriptors = protoFilesToFiles(request)
 
     val responseBuilder = CodeGeneratorResponse.newBuilder
-      .setSupportedFeatures(
-        CodeGeneratorResponse.Feature.FEATURE_PROTO3_OPTIONAL.getNumber.toLong |
-        CodeGeneratorResponse.Feature.FEATURE_SUPPORTS_EDITIONS.getNumber.toLong,
-      )
-      .setMinimumEdition(Edition.EDITION_PROTO2.getNumber)
-      .setMaximumEdition(Edition.EDITION_2026.getNumber)
+      .setSupportedFeatures(CodeGeneratorResponse.Feature.FEATURE_PROTO3_OPTIONAL.getNumber.toLong)
 
     // protoc refuses to write the same file twice, but its error does not say which protos collided
     val generatedFiles = mutable.Map.empty[String, String]
@@ -79,10 +73,11 @@ object Plugin {
       }
     }
 
-    request.getFileToGenerateList.asScala.foreach { fileName =>
-      val f = fileDescriptors(fileName)
+    val filesToGenerate = request.getFileToGenerateList.asScala.toList.map(fileName => fileName -> fileDescriptors(fileName))
 
+    filesToGenerate.foreach { (fileName, f) =>
       addFile(fileName, Generator.fileName(f), Generator.printFile(f))
+      Generator.codecFiles(f).foreach((codecFileName, content) => addFile(fileName, codecFileName, content))
 
       if (ZioGrpcGenerator.hasServices(f)) {
         zioGrpcOptions.foreach { options =>

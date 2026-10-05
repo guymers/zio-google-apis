@@ -25,10 +25,10 @@ object RoutingTest extends ZIOSpecDefault {
 
   private def extract(template: Routing.Template, value: String) = Routing.extract(template, value)
 
-  private final case class Request(name: String)
+  private case class Request(name: String)
 
   // the request of AIP-4222's "last one wins" example
-  private final case class TopicRequest(parent: String, billingProject: String)
+  private case class TopicRequest(parent: String, billingProject: String)
 
   private val projectPattern: Routing.Template =
     template(variable("project", literal("projects"), single), multi)

@@ -65,8 +65,8 @@ lazy val root = project.in(file("."))
   .settings(name := "zio-google-apis")
   .settings(noPublishSettings)
   .aggregate(codegen)
-  .aggregate(shared, sharedIT, common, iam)
-  .aggregate(analytics, cloudErrorReporting, cloudKms, cloudRun, cloudTrace, merchant, secretManager, storage)
+  .aggregate(shared, sharedIT, common, commonTest, iam)
+  .aggregate(ads, analytics, cloudErrorReporting, cloudKms, cloudRun, cloudTrace, merchant, secretManager, storage)
   // note not including client IT projects so `test` does not consider them
   .disablePlugins(MimaPlugin)
 
@@ -80,8 +80,6 @@ lazy val codegen = project.in(file("codegen"))
   .settings(
     // dynver changes the version on every build of a dirty working tree
     version := "0.0.0",
-    // generation needs to use the same field naming logic as the codec
-    Compile / unmanagedSources += (LocalRootProject / baseDirectory).value / "deps/common/src/main/scala/zga/common/FieldNames.scala",
     libraryDependencies ++= Seq(
       "com.google.protobuf" % "protobuf-java" % protobufVersion,
       "com.google.api.grpc" % "proto-google-common-protos" % googleCommonProtosVersion,
@@ -169,6 +167,8 @@ def client(name: String, classPrefix: String, pkgName: String) = {
 def clientIT(name: String) = itProject(name, directory = Some("clients"))
   .dependsOn(sharedIT % "test->test")
 
+lazy val ads = client("ads", classPrefix = "Ads", pkgName = "ads")
+
 lazy val analytics = client("analytics", classPrefix = "Analytics", pkgName = "analytics")
 
 lazy val cloudErrorReporting = client("cloud-error-reporting", classPrefix = "CloudErrorReporting", pkgName = "clouderrorreporting")
@@ -222,8 +222,26 @@ lazy val common = project.in(file("deps/common"))
     ),
   ))
   .settings(compileExternalProtoFiles(_ / "google"))
+  .settings(
+    // only the protos whose types are used, the rest are still on the include path for their imports
+    ProtobufConfig / protobufIncludeFilters := {
+      val base = Glob((ProtobufConfig / protobufExternalIncludePath).value.toPath)
+      commonProtos.map(_.split('/').foldLeft(base)(_ / _))
+    },
+  )
   .settings(protoPlugin(Map.empty))
   .enablePlugins(ProtobufPlugin)
+
+// the generated code of the test protos, which are also compiled with protobuf-java to compare against
+lazy val commonTest = project.in(file("deps/common-test"))
+  .settings(moduleName := "zga-common-test")
+  .settings(noPublishSettings)
+  .settings(protoPlugin(Map.empty))
+  .settings(
+    ProtobufConfig / protobufGeneratedTargets += (((ProtobufConfig / javaSource).value, "*.java")),
+  )
+  .enablePlugins(ProtobufPlugin)
+  .dependsOn(common)
 
 lazy val iam = project.in(file("deps/iam"))
   .settings(moduleName := "zga-iam")
@@ -278,6 +296,32 @@ def protoPlugin(options: Map[String, String]) =
   }.value),
 )
 Global / excludeLintKeys += ProtobufConfig / javaSource
+
+// common protos used by the clients, shared or tests, add to this when a client needs another
+lazy val commonProtos = Seq(
+  "google/api/launch_stage.proto",
+  "google/longrunning/operations.proto",
+  "google/protobuf/any.proto",
+  "google/protobuf/duration.proto",
+  "google/protobuf/empty.proto",
+  "google/protobuf/field_mask.proto",
+  "google/protobuf/struct.proto",
+  "google/protobuf/timestamp.proto",
+  "google/protobuf/wrappers.proto",
+  "google/rpc/error_details.proto",
+  "google/rpc/status.proto",
+  "google/shopping/type/types.proto",
+  "google/type/date.proto",
+  "google/type/datetime.proto",
+  "google/type/dayofweek.proto",
+  "google/type/expr.proto",
+  "google/type/interval.proto",
+  "google/type/latlng.proto",
+  "google/type/money.proto",
+  "google/type/phone_number.proto",
+  "google/type/postal_address.proto",
+  "google/type/timeofday.proto",
+)
 
 def compileExternalProtoFiles(source: File => File) = Seq(
   ProtobufConfig / sourceDirectories += source((ProtobufConfig / protobufExternalIncludePath).value),

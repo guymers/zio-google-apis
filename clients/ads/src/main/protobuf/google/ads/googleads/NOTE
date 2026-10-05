@@ -1,0 +1,1 @@
+When updating the symlink to a new version also update `zga.client.ads.error.AdsError.FailureKey`

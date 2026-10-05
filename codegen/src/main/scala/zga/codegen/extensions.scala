@@ -9,7 +9,6 @@ import com.google.protobuf.DescriptorProtos.FileDescriptorProto
 import com.google.protobuf.DescriptorProtos.ServiceDescriptorProto
 import com.google.protobuf.Descriptors
 import com.google.protobuf.ExtensionLite
-import zga.common.FieldNames
 
 import scala.jdk.CollectionConverters.*
 
@@ -17,31 +16,11 @@ extension (f: Descriptors.FileDescriptor) {
 
   def protoFileName: String = f.getFullName.split('/').filter(_.nonEmpty).last
 
-  def scalaPackageParts: List[String] = {
-    val pkg = Option(f.getOptions.getJavaPackage).filter(_.nonEmpty).getOrElse(f.getPackage)
-    Utils.generatedPackageParts(pkg)
-  }
+  def sourcePackage: String = Option(f.getOptions.getJavaPackage).filter(_.nonEmpty).getOrElse(f.getPackage)
 
-  def scalaPackage: String = {
-    scalaPackageParts.map(Utils.escapeScalaKeyword(_)).mkString(".")
-  }
+  def scalaPackageParts: List[String] = Utils.generatedPackageParts(sourcePackage)
 
-  def descriptorObjectName: String = FileNames.descriptorObjectName(f)
-
-}
-
-private object FileNames {
-
-  // referenced by every generated message's codec, so computed once per file
-  val descriptorObjectName: Descriptors.FileDescriptor => String = Memoize { f =>
-    val base = Option(f.getOptions.getJavaOuterClassname).filter(_.nonEmpty).getOrElse {
-      Utils.snakeCaseToCamelCase(f.protoFileName.stripSuffix(".proto"))
-    }
-    // the object sits alongside the file's top level messages and enums
-    val used = f.getMessageTypes.asScala.map(_.getName) ++ f.getEnumTypes.asScala.map(_.getName)
-    val name = s"${base}Descriptors"
-    if (used.contains(name)) s"${base}OuterClassDescriptors" else name
-  }
+  def scalaPackage: String = scalaPackageParts.map(Utils.escapeScalaKeyword(_)).mkString(".")
 }
 
 extension (d: Descriptors.Descriptor) {
@@ -49,15 +28,20 @@ extension (d: Descriptors.Descriptor) {
   def comment: Option[String] = Comments.comment(d.getFile, sourcePath)
 
   /**
-   * A message's fields, failing codegen for group fields. `getType` (rather
-   * than `getLiteType`, which returns the unrelated `WireFormat.FieldType`)
-   * reports `GROUP` for both a proto2 group and an editions `DELIMITED` field.
+   * A message's fields, failing codegen for group and proto2 `required` fields.
+   * `getType` is used rather than `getLiteType`, which returns the unrelated
+   * `WireFormat.FieldType`.
    */
   def fields: Seq[Descriptors.FieldDescriptor] = {
     val fields = d.getFields.asScala.toSeq
     fields.find(_.getType == Descriptors.FieldDescriptor.Type.GROUP).foreach { field =>
       throw IllegalArgumentException(
         s"${d.getFullName}.${field.getName} is a group field, which is not supported",
+      )
+    }
+    fields.find(_.isRequired).foreach { field =>
+      throw IllegalArgumentException(
+        s"${d.getFullName}.${field.getName} is a proto2 required field, which is not supported",
       )
     }
     fields
@@ -86,8 +70,7 @@ extension (f: Descriptors.FieldDescriptor) {
   def comment: Option[String] = Comments.comment(f.getFile, sourcePath)
 
   /**
-   * The name of the generated case class parameter for this field, following
-   * the same rule the codec uses to map a parameter back to its field.
+   * The name of the generated case class parameter for this field.
    */
   def scalaName: String = FieldNames.toScalaName(f)
 
@@ -102,8 +85,6 @@ extension (f: Descriptors.FieldDescriptor) {
     )
     behaviors.asScala.exists(_.getNumber == FieldBehavior.REQUIRED.getNumber)
   }
-
-  def isMarkedRequired: Boolean = f.isRequired || f.isRequiredByFieldBehavior
 
   def isCollection: Boolean = f.isMapField || f.isRepeated
 
@@ -150,20 +131,26 @@ extension (f: Descriptors.FieldDescriptor) {
     } else if (f.hasPresence) {
       "_root_.scala.None"
     } else {
-      f.getJavaType match {
-        case Descriptors.FieldDescriptor.JavaType.INT => "0"
-        case Descriptors.FieldDescriptor.JavaType.LONG => "0L"
-        case Descriptors.FieldDescriptor.JavaType.FLOAT => "0.0f"
-        case Descriptors.FieldDescriptor.JavaType.DOUBLE => "0.0d"
-        case Descriptors.FieldDescriptor.JavaType.BOOLEAN => "false"
-        case Descriptors.FieldDescriptor.JavaType.BYTE_STRING => "_root_.com.google.protobuf.ByteString.EMPTY"
-        case Descriptors.FieldDescriptor.JavaType.STRING => "\"\""
-        case Descriptors.FieldDescriptor.JavaType.MESSAGE => "_root_.scala.None"
-        case Descriptors.FieldDescriptor.JavaType.ENUM =>
-          if (f.getEnumType.isClosed) s"${scalaType}.fromValue(0).getOrElse(${scalaType}.values.head)"
-          else s"${scalaType}.fromValue(0)"
-      }
+      typeDefaultValue
     }
+  }
+
+  /**
+   * The default value of the field's type, whatever its cardinality or
+   * presence: zero, empty, a closed enum's first value, an open enum's zero or
+   * a message's default.
+   */
+  def typeDefaultValue: String = f.getJavaType match {
+    case Descriptors.FieldDescriptor.JavaType.INT => "0"
+    case Descriptors.FieldDescriptor.JavaType.LONG => "0L"
+    case Descriptors.FieldDescriptor.JavaType.FLOAT => "0.0f"
+    case Descriptors.FieldDescriptor.JavaType.DOUBLE => "0.0d"
+    case Descriptors.FieldDescriptor.JavaType.BOOLEAN => "false"
+    case Descriptors.FieldDescriptor.JavaType.BYTE_STRING => "_root_.com.google.protobuf.ByteString.EMPTY"
+    case Descriptors.FieldDescriptor.JavaType.STRING => "\"\""
+    case Descriptors.FieldDescriptor.JavaType.MESSAGE => s"$scalaType.messageCodec.defaultValue"
+    case Descriptors.FieldDescriptor.JavaType.ENUM =>
+      if (f.getEnumType.isClosed) s"$scalaType.fromOrdinal(0)" else s"$scalaType.fromValue(0)"
   }
 
   def sourcePath: Seq[Int] = {
@@ -189,7 +176,7 @@ extension (o: Descriptors.OneofDescriptor) {
    */
   def isMarkedRequired: Boolean = {
     val members = o.getFields.asScala.filterNot(_.getOptions.getDeprecated)
-    members.nonEmpty && members.forall(_.isMarkedRequired)
+    members.nonEmpty && members.forall(_.isRequiredByFieldBehavior)
   }
 
   def sourcePath: Seq[Int] = {

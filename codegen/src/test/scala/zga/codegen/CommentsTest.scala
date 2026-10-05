@@ -55,6 +55,14 @@ object CommentsTest extends ZIOSpecDefault {
             |  *   line 2
             |  */""".stripMargin)
       },
+      test("params without a comment") {
+        val scaladoc = Comments.formatAsScaladoc("", ListMap("p1" -> "first param"))
+        assertTrue(scaladoc ==
+          """/**
+            |  * @param p1
+            |  *   first param
+            |  */""".stripMargin)
+      },
     ),
     suite("multi line comment")(
       test("single line") {
