@@ -1,6 +1,8 @@
 
 [Architecture](docs/architecture.md)
 
+Best practices in [scala](docs/scala.md)
+
 ## Build Commands
 
 - `sbt compile` -> compiles all code

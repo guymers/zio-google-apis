@@ -200,6 +200,9 @@ lazy val shared = project.in(file("shared"))
       "dev.zio" %% "zio-streams" % zioVersion,
       "io.grpc" % "grpc-api" % grpcVersion,
       "com.google.auth" % "google-auth-library-oauth2-http" % googleOauth2HttpVersion,
+      // DirectPath, see zga.client.DirectPath
+      "io.grpc" % "grpc-alts" % grpcVersion,
+      "io.grpc" % "grpc-googleapis" % grpcVersion,
     )
   ))
   .dependsOn(common)
