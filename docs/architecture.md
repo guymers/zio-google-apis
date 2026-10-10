@@ -10,6 +10,7 @@ Generates Scala 3 case-class messages and ZIO gRPC clients from Google protobuf 
 - **shared** - [ZIO](https://github.com/zio/zio) gRPC runtime
 
 #### Clients
+- **ads** - generated Google Ads client
 - **analytics** - generated Analytics Data and Analytics Admin clients
 - **cloud-error-reporting** - generated Cloud Error Reporting client
 - **cloud-kms** - generated Cloud Key Management Service client

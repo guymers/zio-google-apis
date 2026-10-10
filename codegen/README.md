@@ -14,7 +14,7 @@ Generated sources are written to `target/out/jvm/scala-<version>/<project>/src_m
 
 ## Generated code
 
-The package comes from `java_package`, falling back to the proto `package`. `google.*` and `com.google.*` packages are moved under `zga.google` so they cannot clash with Google's own Java classes on the classpath, and the API version segment (`v1`, `v2`, `v1beta1`, `v1p1beta1`, ads' `v17`, ...) is dropped, so `google.cloud.secretmanager.v1` generates into `zga.google.cloud.secretmanager`. Generated names therefore do not change when an API moves to a new version.
+The package comes from `java_package`, falling back to the proto `package`. `google.*` and `com.google.*` packages are moved under `zga.google` so they cannot clash with Google's own Java classes on the classpath, and the API version segment (`v1`, `v2`, `v1beta1`, `v1p1beta1`, ads' `v17`, ...) is dropped, so `google.cloud.secretmanager.v1` generates into `zga.google.cloud.secretmanager`. Ads' extra `googleads` segment is dropped too, so `google.ads.googleads.v25` generates into `zga.google.ads`. Generated names therefore do not change when an API moves to a new version.
 
 ### Messages and enums
  For each `.proto` file, `Generator.scala` emits the message case classes and enums, and a `<OuterClassname>Descriptors` object holding the file descriptor. Each message has a `given` `zga.common.MessageCodec`.
@@ -67,6 +67,24 @@ A proto3 `optional` field, which the descriptor models as a synthetic oneof, rem
 Generated case classes give every field a default value, except fields marked as required by the proto2 `required` label or by `(google.api.field_behavior) = REQUIRED`.
 
 Required collections keep their empty default, as a required repeated field does not have to be non-empty.
+
+### Large messages
+
+The JVM limits a method to 254 parameter slots, counting a `Long` or a `Double` as two, so a message with more fields than that cannot be one case class. Such a message's fields are split into consecutive chunks of at most that many slots, one nested case class per chunk named `Part1`, `Part2`, and so on, and the message exports them:
+
+```scala
+case class Metrics(
+  part1: Metrics.Part1 = Metrics.Part1(),
+  part2: Metrics.Part2 = Metrics.Part2(),
+) {
+  export part1.*
+  export part2.*
+}
+```
+
+A chunk's parameters keep the whole proto field name. Each chunk derives an explicit `MessageGroupCodec` against the message's own descriptor; it reads fields from the complete message and writes directly into the message's builder. Only the complete message is built and validated, so proto2 required fields can live in different chunks. Groups are distinct from ordinary nested messages, and an unmatched ordinary parameter remains an error.
+
+Exporting chunks makes a field read as the message's own, `metrics.activeViewCtr`. Only reads, though: `copy`, `apply` and pattern matching still take the chunk parameters. Each real `oneof` counts as one parameter and can be placed in a chunk alongside ordinary fields. If the chunk parameters themselves exceed the limit, they are grouped again. A message at the limit is left as one case class.
 
 ### Service clients
 

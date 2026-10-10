@@ -389,6 +389,80 @@ object GeneratorTest extends ZIOSpecDefault {
         assertTrue(Try(Generator.printFile(Descriptors.FileDescriptor.buildFrom(proto, Array.empty))).isFailure)
       },
     ),
+    suite("large messages")(
+      test("chunks oneof parameters as well as ordinary fields") {
+        val fields = (0 until 255).map(index => oneofField(s"value$index", index + 1, index)).toList
+        val output = generateOneof(fields, (0 until 255).map(index => s"choice$index").toList)
+        val outer = output.substring(output.indexOf("case class Message("), output.indexOf("object Message {"))
+        val part1 = output.substring(output.indexOf("case class Part1("), output.indexOf("case class Part2("))
+        val part2 = output.substring(output.indexOf("case class Part2("))
+        assertTrue(outer.contains("part1:"), outer.contains("part2:"), !outer.contains("choice0:")) &&
+        assertTrue(part1.contains("choice253:"), !part1.contains("choice254:"), part2.contains("choice254:")) &&
+        assertTrue(part1.contains("MessageGroupCodec[_root_.test.Message.Part1]")) &&
+        assertTrue(output.contains("sealed trait Choice254 extends _root_.zga.common.Oneof"))
+      },
+      test("preserves mixed member order and slot widths at a group boundary") {
+        val doubles = (1 to 126).map(index => field(name = s"field$index", number = index, fieldType = FieldDescriptorProto.Type.TYPE_DOUBLE)).toList
+        val fields = doubles ++ List(oneofField("selected", 127, 0), stringField(name = "last", number = 128)) ++
+          List(field(name = "overflow", number = 129, fieldType = FieldDescriptorProto.Type.TYPE_DOUBLE))
+        val output = generateOneof(fields, List("choice"))
+        val part1 = output.substring(output.indexOf("case class Part1("), output.indexOf("case class Part2("))
+        val part2 = output.substring(output.indexOf("case class Part2("))
+        assertTrue(part1.indexOf("field126:") < part1.indexOf("choice:")) &&
+        assertTrue(part1.indexOf("choice:") < part1.indexOf("last:")) &&
+        assertTrue(!part1.contains("overflow:"), part2.contains("overflow:"))
+      },
+      test("a required member removes its group's default") {
+        val fields = (1 to 255).map(index => stringField(name = s"field$index", number = index, options = Option.when(index == 1)(requiredOptions))).toList
+        val output = generate(fields)
+        assertTrue(output.contains("  part1: _root_.test.Message.Part1,")) &&
+        assertTrue(output.contains("  part2: _root_.test.Message.Part2 = _root_.test.Message.Part2(),"))
+      },
+      test("group names avoid fields, oneofs and nested types") {
+        val fields = (1 to 254).map(index => stringField(name = s"field$index", number = index)).toList ++
+          List(stringField(name = "part1Group", number = 255), oneofField("selected", 256, 0))
+        val message = messageWithOneofs(fields, List("part2"))
+          .addNestedType(DescriptorProto.newBuilder.setName("Part1"))
+        val output = generateTopLevel(message)
+        assertTrue(output.contains("  part1GroupGroup: _root_.test.Message.Part1Group")) &&
+        assertTrue(output.contains("  part2Group: _root_.test.Message.Part2Group"))
+      },
+      test("leaves a message at the parameter limit flat") {
+        val fields = (1 to 254).map(index => stringField(name = s"field$index", number = index)).toList
+        val output = generate(fields)
+        assertTrue(output.contains("""  field1: _root_.scala.Predef.String = "",""")) &&
+        assertTrue(output.contains("""  field254: _root_.scala.Predef.String = "",""")) &&
+        assertTrue(!output.contains("case class Part"))
+      },
+      test("chunks a message over the parameter limit and exports each chunk") {
+        val fields = (1 to 300).map(index => stringField(name = s"field$index", number = index)).toList
+        val output = generate(fields)
+        val part1 = output.substring(output.indexOf("case class Part1("), output.indexOf("case class Part2("))
+        val part2 = output.substring(output.indexOf("case class Part2("))
+        assertTrue(output.contains("  part1: _root_.test.Message.Part1 = _root_.test.Message.Part1(),")) &&
+        assertTrue(output.contains("  part2: _root_.test.Message.Part2 = _root_.test.Message.Part2(),")) &&
+        // reads look flat, because the message exports the chunks
+        assertTrue(output.contains("  export part1.*")) &&
+        assertTrue(output.contains("  export part2.*")) &&
+        // the chunks hold consecutive fields, up to the limit
+        assertTrue(part1.contains("""  field254: _root_.scala.Predef.String = "",""")) &&
+        assertTrue(!part1.contains("field255")) &&
+        assertTrue(part2.contains("""  field255: _root_.scala.Predef.String = "",""")) &&
+        assertTrue(part2.contains("""  field300: _root_.scala.Predef.String = "",""")) &&
+        assertTrue(!part2.contains("field254"))
+      },
+      test("counts a long or double field as two of the 254 slots") {
+        val fields = (1 to 200)
+          .map(index => field(name = s"field$index", number = index, fieldType = FieldDescriptorProto.Type.TYPE_DOUBLE))
+          .toList
+        val output = generate(fields)
+        val part1 = output.substring(output.indexOf("case class Part1("), output.indexOf("case class Part2("))
+        val part2 = output.substring(output.indexOf("case class Part2("))
+        assertTrue(part1.contains("  field127: _root_.scala.Double = 0.0d,")) &&
+        assertTrue(!part1.contains("field128")) &&
+        assertTrue(part2.contains("  field128: _root_.scala.Double = 0.0d,"))
+      },
+    ),
     suite("validation")(
       test("rejects a group field") {
         val proto = FileDescriptorProto.newBuilder

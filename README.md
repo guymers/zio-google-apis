@@ -4,6 +4,7 @@ Scala 3 [ZIO](https://zio.dev) gRPC clients for Google APIs.
 
 ## Clients
 
+- [Ads](https://developers.google.com/google-ads/api/reference/rpc/v25/overview)
 - [Analytics Data](https://developers.google.com/analytics/devguides/reporting/data/v1)
 - [Analytics Admin](https://developers.google.com/analytics/devguides/config/admin/v1)
 - [Cloud Error Reporting](https://docs.cloud.google.com/error-reporting/reference/rest)
