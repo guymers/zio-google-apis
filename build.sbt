@@ -40,6 +40,10 @@ scalacOptions ++= Seq(
   "-Wvalue-discard",
 )
 
+Compile / doc / scalacOptions ++= Seq(
+  s"-external-mappings:.*grpc-api.*::javadoc::https://javadoc.io/static/io.grpc/grpc-api/$grpcVersion/",
+)
+
 Compile / console / scalacOptions ~= filterScalacConsoleOpts
 Test / console / scalacOptions ~= filterScalacConsoleOpts
 

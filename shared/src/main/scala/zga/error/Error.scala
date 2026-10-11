@@ -34,7 +34,7 @@ object Error {
 
   /**
    * @see
-   *   [[Status.Code.CANCELLED]]
+   *   [[io.grpc.Status.Code.CANCELLED]]
    */
   case class Cancelled(
     description: Option[String],
@@ -46,7 +46,7 @@ object Error {
 
   /**
    * @see
-   *   [[Status.Code.UNKNOWN]]
+   *   [[io.grpc.Status.Code.UNKNOWN]]
    */
   case class Unknown(
     description: Option[String],
@@ -58,7 +58,7 @@ object Error {
 
   /**
    * @see
-   *   [[Status.Code.INVALID_ARGUMENT]]
+   *   [[io.grpc.Status.Code.INVALID_ARGUMENT]]
    */
   case class InvalidArgument(
     description: Option[String],
@@ -70,7 +70,7 @@ object Error {
 
   /**
    * @see
-   *   [[Status.Code.DEADLINE_EXCEEDED]]
+   *   [[io.grpc.Status.Code.DEADLINE_EXCEEDED]]
    */
   case class DeadlineExceeded(
     description: Option[String],
@@ -82,7 +82,7 @@ object Error {
 
   /**
    * @see
-   *   [[Status.Code.NOT_FOUND]]
+   *   [[io.grpc.Status.Code.NOT_FOUND]]
    */
   case class NotFound(
     description: Option[String],
@@ -94,7 +94,7 @@ object Error {
 
   /**
    * @see
-   *   [[Status.Code.ALREADY_EXISTS]]
+   *   [[io.grpc.Status.Code.ALREADY_EXISTS]]
    */
   case class AlreadyExists(
     description: Option[String],
@@ -106,7 +106,7 @@ object Error {
 
   /**
    * @see
-   *   [[Status.Code.PERMISSION_DENIED]]
+   *   [[io.grpc.Status.Code.PERMISSION_DENIED]]
    */
   case class PermissionDenied(
     description: Option[String],
@@ -118,7 +118,7 @@ object Error {
 
   /**
    * @see
-   *   [[Status.Code.RESOURCE_EXHAUSTED]]
+   *   [[io.grpc.Status.Code.RESOURCE_EXHAUSTED]]
    */
   case class ResourceExhausted(
     description: Option[String],
@@ -130,7 +130,7 @@ object Error {
 
   /**
    * @see
-   *   [[Status.Code.FAILED_PRECONDITION]]
+   *   [[io.grpc.Status.Code.FAILED_PRECONDITION]]
    */
   case class FailedPrecondition(
     description: Option[String],
@@ -142,7 +142,7 @@ object Error {
 
   /**
    * @see
-   *   [[Status.Code.ABORTED]]
+   *   [[io.grpc.Status.Code.ABORTED]]
    */
   case class Aborted(
     description: Option[String],
@@ -154,7 +154,7 @@ object Error {
 
   /**
    * @see
-   *   [[Status.Code.OUT_OF_RANGE]]
+   *   [[io.grpc.Status.Code.OUT_OF_RANGE]]
    */
   case class OutOfRange(
     description: Option[String],
@@ -166,7 +166,7 @@ object Error {
 
   /**
    * @see
-   *   [[Status.Code.UNIMPLEMENTED]]
+   *   [[io.grpc.Status.Code.UNIMPLEMENTED]]
    */
   case class Unimplemented(
     description: Option[String],
@@ -178,7 +178,7 @@ object Error {
 
   /**
    * @see
-   *   [[Status.Code.INTERNAL]]
+   *   [[io.grpc.Status.Code.INTERNAL]]
    */
   case class Internal(
     description: Option[String],
@@ -190,7 +190,7 @@ object Error {
 
   /**
    * @see
-   *   [[Status.Code.UNAVAILABLE]]
+   *   [[io.grpc.Status.Code.UNAVAILABLE]]
    */
   case class Unavailable(
     description: Option[String],
@@ -202,7 +202,7 @@ object Error {
 
   /**
    * @see
-   *   [[Status.Code.DATA_LOSS]]
+   *   [[io.grpc.Status.Code.DATA_LOSS]]
    */
   case class DataLoss(
     description: Option[String],
@@ -214,7 +214,7 @@ object Error {
 
   /**
    * @see
-   *   [[Status.Code.UNAUTHENTICATED]]
+   *   [[io.grpc.Status.Code.UNAUTHENTICATED]]
    */
   case class Unauthenticated(
     description: Option[String],
