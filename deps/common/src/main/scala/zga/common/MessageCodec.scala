@@ -1,38 +1,87 @@
 package zga.common
 
 import com.google.protobuf.ByteString
-import com.google.protobuf.Descriptors
-import com.google.protobuf.DynamicMessage
+import com.google.protobuf.CodedInputStream
+import com.google.protobuf.CodedOutputStream
+import com.google.protobuf.InvalidProtocolBufferException
+import io.grpc.KnownLength
 import io.grpc.MethodDescriptor
+import io.grpc.Status
+import zio.Chunk
 
 import java.io.ByteArrayInputStream
 import java.io.InputStream
-import scala.deriving.Mirror
-import scala.jdk.CollectionConverters.*
-import scala.quoted.*
 import scala.util.Try
 
 /**
- * Ability to serialize a message to/from protobuf bytes.
+ * Ability to serialize a message to/from protobuf bytes. Implemented by the
+ * generated code of each message.
+ *
+ * An abstract class rather than a trait, so that each generated codec does not
+ * get its own copy of the concrete members.
  */
-sealed trait MessageCodec[T] extends FieldCodec[T] {
+abstract class MessageCodec[T] {
 
-  def descriptor: Descriptors.Descriptor
-
-  def toByteArray(value: T): Array[Byte]
-
-  def parseFrom(bytes: Array[Byte]): T
-
-  final def safeParseFrom[A](value: ByteString): Either[Throwable, T] = {
-    Try(parseFrom(value.toByteArray)).toEither
+  final def toByteArray(value: T): Array[Byte] = {
+    val sizes = new Sizes
+    val bytes = new Array[Byte](serializedSize(value, sizes))
+    val output = CodedOutputStream.newInstance(bytes)
+    writeTo(output, value, sizes)
+    output.checkNoSpaceLeft()
+    bytes
   }
 
-  override def toProto(field: Descriptors.FieldDescriptor, value: T) = {
-    DynamicMessage.parseFrom(field.getMessageType, toByteArray(value))
+  final def parseFrom(bytes: Array[Byte]): T = parse(CodedInputStream.newInstance(bytes))
+
+  final def safeParseFrom(value: ByteString): Either[Throwable, T] = {
+    Try(parse(value.newCodedInput())).toEither
   }
 
-  override def fromProto(field: Descriptors.FieldDescriptor, value: Any, present: Boolean) = {
-    parseFrom(value.asInstanceOf[DynamicMessage].toByteArray)
+  /**
+   * The number of bytes the fields of the message encode to, recording the
+   * sizes of its length delimited values in `sizes`.
+   */
+  private[zga] def serializedSize(value: T, sizes: Sizes): Int
+
+  /**
+   * Writes the fields of the message in field number order, a oneof at its
+   * first member's number, reading the sizes of its length delimited values
+   * from `sizes`.
+   */
+  private[zga] def writeTo(output: CodedOutputStream, value: T, sizes: Sizes): Unit
+
+  /**
+   * Reads fields up to the end of the input or of the current limit, merging
+   * them into `value` as protobuf does: a scalar replaces the previous value, a
+   * message merges into it, and a repeated or map field appends to it.
+   */
+  private[zga] def readFrom(reader: ProtoReader, value: T): T
+
+  private[zga] def defaultValue: T
+
+  /**
+   * The size of the message as a field value, prefixed by its length.
+   */
+  private[zga] final def delimitedSize(value: T, sizes: Sizes): Int = sizes.delimited(serializedSize(value, sizes))
+
+  private[zga] final def writeDelimited(output: CodedOutputStream, value: T, sizes: Sizes): Unit = {
+    sizes.writeLength(output)
+    writeTo(output, value, sizes)
+  }
+
+  private[zga] final def readDelimited(reader: ProtoReader): T = readDelimited(reader, defaultValue)
+
+  private[zga] final def readDelimited(reader: ProtoReader, previous: T): T = reader.message(readFrom(reader, previous))
+
+  private[zga] final def readDelimited(reader: ProtoReader, previous: Option[T]): T = previous match {
+    case Some(value) => readDelimited(reader, value)
+    case None => readDelimited(reader)
+  }
+
+  private def parse(input: CodedInputStream): T = {
+    val value = readFrom(ProtoReader(input), defaultValue)
+    input.checkLastTagWas(0)
+    value
   }
 }
 
@@ -40,139 +89,99 @@ object MessageCodec {
 
   def apply[T](using codec: MessageCodec[T]): MessageCodec[T] = codec
 
-  def marshaller[T](using codec: MessageCodec[T]) = new MethodDescriptor.Marshaller[T] {
-    override def stream(value: T) = new ByteArrayInputStream(codec.toByteArray(value))
-    override def parse(stream: InputStream) = codec.parseFrom(stream.readAllBytes())
-  }
+  /**
+   * The codec of a message without fields, which skips the fields it reads.
+   */
+  private[zga] def empty[T](default: T): MessageCodec[T] = new EmptyMessageCodec(default)
 
-  inline def derived[T](descriptor: Descriptors.Descriptor)(using mirror: Mirror.ProductOf[T]): MessageCodec[T] =
-    ${ derivedImpl[T]('descriptor, 'mirror) }
-
-  private def derivedImpl[T: Type](
-    descriptor: Expr[Descriptors.Descriptor],
-    mirror: Expr[Mirror.ProductOf[T]],
-  )(using Quotes): Expr[MessageCodec[T]] = {
-    import quotes.reflect.*
-
-    val tpe = TypeRepr.of[T]
-    val fields = tpe.typeSymbol.caseFields
-    val labels = fields.map(field => Expr(field.name))
-    val codecs = fields.map { field =>
-      val memberType = tpe.memberType(field)
-      // a oneof parameter is an `Option` of a `Oneof`, which no `FieldCodec` encodes
-      val fieldCodec = memberType.asType match {
-        case '[t] => Expr.summon[FieldCodec[t]].map(_.asInstanceOf[Expr[FieldCodec[?] | OneofCodec[?]]])
+  private final class EmptyMessageCodec[T](default: T) extends MessageCodec[T] {
+    override private[zga] def defaultValue = default
+    override private[zga] def serializedSize(value: T, sizes: Sizes) = 0
+    override private[zga] def writeTo(output: CodedOutputStream, value: T, sizes: Sizes) = ()
+    override private[zga] def readFrom(reader: ProtoReader, value: T) = {
+      var done = false
+      while (!done) {
+        val tag = reader.input.readTag()
+        done = tag == 0 || !reader.input.skipField(tag)
       }
-      fieldCodec.orElse {
-        memberType.asType match {
-          case '[Option[x]] => Expr.summon[OneofCodec[x & Oneof]].map(_.asInstanceOf[Expr[FieldCodec[?] | OneofCodec[?]]])
-          case _ => None
-        }
-      }.getOrElse {
-        report.errorAndAbort(s"${Type.show[T]} has no FieldCodec or OneofCodec for the field '${field.name}'")
-      }
-    }
-    val labelsExpr = '{ Array[String](${ Varargs(labels) }*) }
-    val codecsExpr = '{ Array[FieldCodec[?] | OneofCodec[?]](${ Varargs(codecs) }*) }
-    '{ new ProductMessageCodec[T]($descriptor, $mirror, $labelsExpr, $codecsExpr) }
-  }
-
-  private sealed trait Member {
-
-    /**
-     * The field to set and its encoded value, or `None` when the element
-     * carries no value.
-     */
-    def toProto(element: Any): Option[(Descriptors.FieldDescriptor, AnyRef)]
-    def fromProto(message: DynamicMessage): Any
-  }
-  private object Member {
-
-    final case class Field(field: Descriptors.FieldDescriptor, codec: FieldCodec[Any]) extends Member {
-      override def toProto(element: Any) = Option(codec.toProto(field, element)).map(value => field -> value)
-      override def fromProto(message: DynamicMessage) = {
-        val present = !field.isRepeated && field.hasPresence && message.hasField(field)
-        codec.fromProto(field, message.getField(field), present)
-      }
-    }
-
-    final case class Oneof(oneof: Descriptors.OneofDescriptor, codec: OneofCodec[zga.common.Oneof]) extends Member {
-      override def toProto(element: Any) = {
-        codec.toProto(oneof, element.asInstanceOf[Option[zga.common.Oneof]])
-      }
-      override def fromProto(message: DynamicMessage) = {
-        codec.fromProto(message, oneof)
-      }
+      value
     }
   }
 
-  private[zga] final class ProductMessageCodec[T](
-    val descriptor: Descriptors.Descriptor,
-    mirror: Mirror.ProductOf[T],
-    labels: Array[String],
-    _codecs: => Array[FieldCodec[?] | OneofCodec[?]],
-  ) extends MessageCodec[T] {
+  def marshaller[T](using codec: MessageCodec[T]): MethodDescriptor.Marshaller[T] = new MethodDescriptor.Marshaller[T] {
+    override def stream(value: T) = new KnownLengthInputStream(codec.toByteArray(value))
 
-    private lazy val members: Array[Member] = {
-      // a proto3 `optional` field is a synthetic oneof, so only real oneofs replace a field parameter
-      val oneofs = descriptor.getRealOneofs.asScala.map(oneof => FieldNames.toScalaName(oneof) -> oneof).toMap
-      val fields = descriptor.getFields.asScala.map(field => FieldNames.toScalaName(field) -> field).toMap
-      val codecs = _codecs
-      labels.zipWithIndex.map { case (label, index) =>
-        oneofs.get(label) match {
-          case Some(oneof) => Member.Oneof(oneof, codecs(index).asInstanceOf[OneofCodec[zga.common.Oneof]])
-          case None =>
-            fields.get(label) match {
-              case Some(field) => Member.Field(field, codecs(index).asInstanceOf[FieldCodec[Any]])
-              case None => throw IllegalStateException(s"${descriptor.getFullName} has no field or oneof matching the case class parameter '$label'")
-            }
+    // https://github.com/grpc/grpc-java/blob/v1.83.1/protobuf-lite/src/main/java/io/grpc/protobuf/lite/ProtoLiteUtils.java#L167
+    override def parse(stream: InputStream) = {
+      val size = stream match {
+        case _: KnownLength => stream.available()
+        case _ => -1
+      }
+      if (size == 0) codec.defaultValue
+      else {
+        val input = if (size > 0 && size <= MaxBufferedSize) {
+          val buffer = readFully(stream, size)
+          CodedInputStream.newInstance(buffer, 0, size)
+        } else CodedInputStream.newInstance(stream)
+        input.setSizeLimit(Int.MaxValue)
+        try {
+          codec.parse(input)
+        } catch {
+          case e: InvalidProtocolBufferException =>
+            throw Status.INTERNAL.withDescription("Invalid protobuf byte sequence").withCause(e).asRuntimeException()
         }
       }
     }
+  }
 
-    override def toByteArray(value: T) = toMessage(value).toByteArray
+  // gRPC frames a stream of known length without first buffering it to find the length
+  private final class KnownLengthInputStream(bytes: Array[Byte]) extends ByteArrayInputStream(bytes) with KnownLength
 
-    override def parseFrom(bytes: Array[Byte]) = fromMessage(DynamicMessage.parseFrom(descriptor, bytes))
+  // gRPC's default maximum message size, larger messages are decoded from the stream
+  private val MaxBufferedSize = 4 * 1024 * 1024
 
-    override def toProto(field: Descriptors.FieldDescriptor, value: T) = {
-      val message = toMessage(value)
-      if (message.getDescriptorForType eq field.getMessageType) {
-        message
+  /**
+   * Reads `size` bytes from the stream into an array, decoding from an array
+   * being faster than from a stream.
+   */
+  private def readFully(stream: InputStream, size: Int): Array[Byte] = {
+    val buffer = new Array[Byte](size)
+    var remaining = size
+    var done = false
+    while (!done && remaining > 0) {
+      val count = stream.read(buffer, size - remaining, remaining)
+      if (count == -1) {
+        done = true
       } else {
-        DynamicMessage.parseFrom(field.getMessageType, message.toByteArray)
+        remaining -= count
       }
     }
+    if (remaining != 0) {
+      throw RuntimeException(s"size inaccurate: $size != ${size - remaining}")
+    }
+    buffer
+  }
 
-    override def fromProto(field: Descriptors.FieldDescriptor, value: Any, present: Boolean) = {
-      val message = value.asInstanceOf[DynamicMessage]
-      if (message.getDescriptorForType eq descriptor) {
-        fromMessage(message)
-      } else {
-        fromMessage(DynamicMessage.parseFrom(descriptor, message.toByteArray))
-      }
+  /**
+   * The total size of the values of a variable width type, without tags.
+   */
+  private[zga] inline def dataSize[A](values: Chunk[A])(inline size: A => Int): Int = {
+    var total = 0
+    var i = 0
+    while (i < values.length) {
+      total += size(values(i))
+      i += 1
     }
+    total
+  }
 
-    private def toMessage(value: T): DynamicMessage = {
-      val product = value.asInstanceOf[Product]
-      val builder = DynamicMessage.newBuilder(descriptor)
-      var i = 0
-      while (i < members.length) {
-        members(i).toProto(product.productElement(i)).foreach { case (field, value) =>
-          val _ = builder.setField(field, value)
-        }
-        i += 1
-      }
-      builder.build()
-    }
-
-    private def fromMessage(message: DynamicMessage): T = {
-      val values = new Array[Any](members.length)
-      var i = 0
-      while (i < members.length) {
-        values(i) = members(i).fromProto(message)
-        i += 1
-      }
-      mirror.fromProduct(Tuple.fromArray(values))
-    }
+  /**
+   * The total size of the entries of a map field, each a length delimited
+   * message, without tags, recording the size of each entry in `sizes`.
+   */
+  private[zga] inline def mapSize[K, V](entries: Map[K, V], sizes: Sizes)(inline entrySize: (K, V) => Int): Int = {
+    var total = 0
+    entries.foreachEntry((key, value) => total += sizes.delimited(entrySize(key, value)))
+    total
   }
 }

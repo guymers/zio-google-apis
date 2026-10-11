@@ -1,0 +1,65 @@
+syntax = "proto2";
+
+package zga.codectest;
+
+option java_outer_classname = "Proto2Java";
+
+// a closed enum, which drops numbers it does not know; as a map value it has to
+// start at 0
+enum Size {
+  SIZE_UNSPECIFIED = 0;
+  SMALL = 1;
+  LARGE = 2;
+}
+
+// numbered out of declaration order, so a value's number is not its ordinal
+enum Level {
+  MEDIUM = 5;
+  LOW = 1;
+  HIGH = 10;
+}
+
+message Levels {
+  optional Level single = 1;
+  repeated Level many = 2;
+}
+
+// proto2 packs repeated scalars only when asked to
+message Unpacked {
+  repeated int32 ints = 1;
+  repeated sint64 zigzags = 2;
+  repeated fixed32 fixeds = 3;
+  repeated double doubles = 4;
+  repeated bool bools = 5;
+  repeated string strings = 6;
+  repeated Size sizes = 7;
+}
+
+message ClosedEnums {
+  optional Size single = 1;
+  repeated Size unpacked = 2;
+  repeated Size packed = 3 [packed = true];
+  map<string, Size> by_name = 4;
+  oneof choice {
+    Size choice_size = 5;
+    string choice_name = 6;
+  }
+}
+
+// a recursive message, whose fields have presence and whose strings are not
+// validated as UTF-8
+message Node {
+  optional string name = 1;
+  optional int32 number = 2;
+  optional Size size = 3;
+  repeated int32 unpacked = 4;
+  repeated int32 packed = 5 [packed = true];
+  optional uint64 unsigned = 6;
+  optional int64 signed = 7;
+  optional double real = 8;
+  optional bytes data = 9;
+  optional Node child = 10;
+  repeated Node children = 11;
+  // the fields of a proto2 map entry have presence
+  map<int32, int32> counts = 12;
+}

@@ -3,6 +3,7 @@ package zga.codegen
 import com.google.protobuf.Descriptors
 
 import scala.collection.immutable.ListMap
+import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
 
 object Generator {
@@ -12,7 +13,7 @@ object Generator {
   private val ReservedEnumMemberNames = Set(
     "fromValue",
     "valueMap",
-    "fieldCodec",
+    "numbers",
     "values",
     "valueOf",
     "fromOrdinal",
@@ -26,12 +27,16 @@ object Generator {
   )
 
   private val ReservedFieldNames = Set(
+    "canEqual",
     "clone",
+    "copy",
     "finalize",
     "hashCode",
     "notify",
     "notifyAll",
     "productArity",
+    "productElement",
+    "productElementName",
     "productElementNames",
     "productIterator",
     "productPrefix",
@@ -44,69 +49,60 @@ object Generator {
   }
 
   def printFile(f: Descriptors.FileDescriptor) = {
-    val descriptor = printFileDescriptor(f)
+    s"""${fileHeader(f)}
+      |${f.getEnumTypes.asScala.map(printEnum(_)).mkString("\n")}
+      |${f.getMessageTypes.asScala.map(printMessage(_)).mkString("\n")}
+      |""".stripMargin
+  }
+
+  /**
+   * The file name and content of when a codec is defined in a separate file to
+   * keep the file of its message smaller.
+   */
+  def codecFiles(f: Descriptors.FileDescriptor): List[(String, String)] = {
+    def messages(m: Descriptors.Descriptor): List[Descriptors.Descriptor] =
+      m :: m.getNestedTypes.asScala.toList.filterNot(_.getOptions.getMapEntry).flatMap(messages)
+
+    // the object is only reached through its message's companion
+    val visibility = f.scalaPackageParts.lastOption.fold("")(part => s"private[${Utils.escapeScalaKeyword(part)}] ")
+    f.getMessageTypes.asScala.toList.flatMap(messages).flatMap { m =>
+      val parameters = messageLayout(m)
+      Option.when(CodecGenerator.isSplit(parameters)) {
+        val name = codecObjectName(m)
+        val content =
+          s"""${fileHeader(f)}
+            |${visibility}object $name {
+            |${CodecGenerator.printMessageCodec(m, parameters)}
+            |}
+            |""".stripMargin
+        (f.scalaPackageParts :+ s"$name.scala").mkString("/") -> content
+      }
+    }
+  }
+
+  private def fileHeader(f: Descriptors.FileDescriptor) = {
     // a proto with neither `package` nor `option java_package` keeps its types in
     // the default package, which has no `package` declaration
     val packageDeclaration = if (f.scalaPackage.isEmpty) "" else s"package ${f.scalaPackage}\n"
     s"""${Comments.header(f).map(Comments.formatAsMultiLineComment(_)).getOrElse("")}
-      |$packageDeclaration
-      |${f.getEnumTypes.asScala.map(printEnum(_)).mkString("\n")}
-      |${f.getMessageTypes.asScala.map(printMessage(_)).mkString("\n")}
-      |$descriptor
-      |""".stripMargin
+      |$packageDeclaration""".stripMargin
   }
-
-  private def printFileDescriptor(f: Descriptors.FileDescriptor) = {
-    val proto = f.toProto.toBuilder.clearSourceCodeInfo().build()
-    val descriptor = descriptorLiteral(proto.toByteArray)
-    val dependencies = f.getDependencies.asScala
-      .map(d => s"${Utils.rootQualified(d.scalaPackage)}.${d.descriptorObjectName}.javaDescriptor")
-      .mkString(",\n        ")
-    s"""object ${f.descriptorObjectName} {
-      |  val javaDescriptor: _root_.com.google.protobuf.Descriptors.FileDescriptor = {
-      |    val proto = _root_.com.google.protobuf.DescriptorProtos.FileDescriptorProto.parseFrom(
-      |      _root_.java.util.Base64.getDecoder.decode(
-      |        $descriptor
-      |      )
-      |    )
-      |    _root_.com.google.protobuf.Descriptors.FileDescriptor.buildFrom(
-      |      proto,
-      |      _root_.scala.Array[_root_.com.google.protobuf.Descriptors.FileDescriptor](
-      |        $dependencies
-      |      ),
-      |      true
-      |    )
-      |  }
-      |}""".stripMargin
-  }
-
-  private val DescriptorChunkSize = 8192
 
   /**
-   * Encodes the descriptor as a Scala expression producing the Base64 text.
-   *
-   * The JVM class file format limits a string constant to 65535 bytes, which a
-   * large proto's descriptor can exceed, so the text is emitted as chunks that
-   * are concatenated at runtime. The chunks are joined with `mkString` rather
-   * than `+`, as the compiler folds `+` of literals back into one constant.
+   * The object of a codec in a file of its own, named after the message and the
+   * messages it is nested in: `Outer.Inner` has `OuterInnerMessageCodec`.
    */
-  private[codegen] def descriptorLiteral(bytes: Array[Byte]): String = {
-    val chunks = java.util.Base64.getEncoder
-      .encodeToString(bytes)
-      .grouped(DescriptorChunkSize)
-      .map(chunk => s""""$chunk"""")
-      .toList
-    chunks match {
-      case chunk :: Nil => chunk
-      case _ => chunks.mkString("_root_.scala.Array(\n", ",\n", ",\n).mkString")
-    }
+  private def codecObjectName(m: Descriptors.Descriptor): String = {
+    def names(d: Descriptors.Descriptor): List[String] = d.parent.fold(Nil)(names) :+ d.getName
+
+    names(m).mkString + "MessageCodec"
   }
 
   private def printEnum(e: Descriptors.EnumDescriptor) = {
     if (e.isClosed) printClosedEnum(e) else printOpenEnum(e)
   }
 
-  private def printEnumValues(e: Descriptors.EnumDescriptor, reserved: Set[String], parent: String) = {
+  private def printEnumValues(e: Descriptors.EnumDescriptor, reserved: Set[String]) = {
     def printEnumValue(v: Descriptors.EnumValueDescriptor) = {
       if (reserved.contains(v.getName)) {
         throw IllegalArgumentException(
@@ -116,11 +112,25 @@ object Generator {
       List(
         v.comment.map(Comments.formatAsScaladoc(_, ListMap.empty)),
         Option(v.getOptions.getDeprecated).filter(identity(_)).map(_ => deprecatedAnnotation),
-        Some(s"case ${Utils.escapeScalaKeyword(v.getName)} extends $parent(${v.getNumber})"),
+        Some(s"case ${Utils.escapeScalaKeyword(v.getName)}"),
       ).flatten
     }
 
     e.getValues.asScala.flatMap(printEnumValue(_))
+  }
+
+  /**
+   * Each value is a plain case, as a case with constructor arguments compiles
+   * to a class of its own, and looks up its number by ordinal: the ordinal
+   * itself when the numbers count up from zero, otherwise the `numbers` array.
+   */
+  private def printEnumNumbers(e: Descriptors.EnumDescriptor, numbersRef: String) = {
+    val numbers = e.getValues.asScala.map(_.getNumber)
+    if (numbers.zipWithIndex.forall(_ == _)) ("def value: _root_.scala.Int = ordinal", "")
+    else (
+      s"def value: _root_.scala.Int = $numbersRef(ordinal)",
+      s"\n  private val numbers = _root_.scala.Array[_root_.scala.Int](${numbers.mkString(", ")})",
+    )
   }
 
   private def enumComment(e: Descriptors.EnumDescriptor) = {
@@ -131,10 +141,9 @@ object Generator {
   }
 
   /**
-   * An open enum (proto3, or an editions enum without `enum_type = CLOSED`)
-   * keeps a number it does not know. The known values are a Scala enum,
-   * exported so they can be referred to as `E.A`, and an unknown number is an
-   * `Unrecognized` case class.
+   * An open enum (proto3) keeps a number it does not know. The known values are
+   * a Scala enum, exported so they can be referred to as `E.A`, and an unknown
+   * number is an `Unrecognized` case class.
    */
   private def printOpenEnum(e: Descriptors.EnumDescriptor) = {
     if (e.getName == "Unrecognized") {
@@ -142,7 +151,8 @@ object Generator {
     }
     val enumName = Utils.escapeScalaKeyword(e.getName)
     val enumType = e.scalaType
-    val values = printEnumValues(e, ReservedEnumMemberNames ++ Set("Recognized", "Unrecognized"), "Recognized")
+    val values = printEnumValues(e, ReservedEnumMemberNames ++ Set("Recognized", "Unrecognized"))
+    val (valueMethod, numbers) = printEnumNumbers(e, "numbers")
 
     s"""
       |${enumComment(e)}
@@ -150,122 +160,230 @@ object Generator {
       |  def value: _root_.scala.Int
       |}
       |object $enumName {
-      |  enum Recognized(val value: _root_.scala.Int) extends $enumType {
+      |  enum Recognized extends $enumType {
       |    ${values.mkString("\n    ")}
+      |
+      |    $valueMethod
       |  }
       |  export Recognized.*
       |
       |  case class Unrecognized private[$enumName] (value: _root_.scala.Int) extends $enumType
-      |
-      |  private val valueMap = Recognized.values.map(v => v.value -> v).toMap
+      |$numbers
+      |  // the first of values sharing a number wins, as in protobuf-java
+      |  private val valueMap = Recognized.values.reverseIterator.map(v => v.value -> v).toMap
       |  def fromValue(v: _root_.scala.Int): $enumType = valueMap.getOrElse(v, Unrecognized(v))
-      |
-      |  given fieldCodec: _root_.zga.common.FieldCodec[$enumType] =
-      |    _root_.zga.common.FieldCodec.enumCodec(
-      |      (value: _root_.scala.Int) => fromValue(value),
-      |      (value: $enumType) => value.value,
-      |    )
       |}
       |""".stripMargin
   }
 
   /**
-   * A closed enum (proto2, or an editions enum with `enum_type = CLOSED`).
-   * protobuf-java stores a number it does not know in the message's unknown
-   * fields rather than the enum field, so there is no unknown value to keep.
+   * A closed enum (proto2). A number it does not know is dropped when read, as
+   * protobuf-java moves it to the message's unknown fields, so there is no
+   * unknown value to keep. The first value is the default.
    */
   private def printClosedEnum(e: Descriptors.EnumDescriptor) = {
     val enumName = Utils.escapeScalaKeyword(e.getName)
-    val values = printEnumValues(e, ReservedEnumMemberNames, enumName)
+    val values = printEnumValues(e, ReservedEnumMemberNames)
+    val (valueMethod, numbers) = printEnumNumbers(e, s"$enumName.numbers")
 
     s"""
       |${enumComment(e)}
-      |enum $enumName(val value: _root_.scala.Int) derives _root_.scala.CanEqual {
+      |enum $enumName derives _root_.scala.CanEqual {
       |  ${values.mkString("\n  ")}
-      |}
-      |object $enumName {
-      |  private val valueMap = $enumName.values.map(v => v.value -> v).toMap
-      |  def fromValue(v: _root_.scala.Int): _root_.scala.Option[$enumName] = valueMap.get(v)
       |
-      |  given fieldCodec: _root_.zga.common.FieldCodec[$enumName] =
-      |    _root_.zga.common.FieldCodec.enumCodec(
-      |      (value: _root_.scala.Int) => $enumName.fromValue(value).getOrElse($enumName.values.head),
-      |      (value: $enumName) => value.value,
-      |    )
+      |  $valueMethod
+      |}
+      |object $enumName {$numbers
+      |  // the first of values sharing a number wins, as in protobuf-java
+      |  private val valueMap = $enumName.values.reverseIterator.map(v => v.value -> v).toMap
+      |  def fromValue(v: _root_.scala.Int): _root_.scala.Option[$enumName] = valueMap.get(v)
       |}
       |""".stripMargin
   }
 
+  /**
+   * The JVM limits a method's parameter list to 254 slots, and a `Long` or a
+   * `Double` takes two. A message over the limit is generated as consecutive
+   * chunks, each small enough to be one case class, and the message exports the
+   * chunks' fields so they read as if the message were one case class. The
+   * message's codec reads and writes the chunks' fields as its own.
+   */
+  private val MaxParameterSlots = 254
+
+  private def isDoubleSlot(f: Descriptors.FieldDescriptor) = {
+    !f.isCollection &&
+    !f.hasPresence &&
+    (f.getJavaType match {
+      case Descriptors.FieldDescriptor.JavaType.LONG | Descriptors.FieldDescriptor.JavaType.DOUBLE => true
+      case _ => false
+    })
+  }
+
+  private def parameterSlots(f: Descriptors.FieldDescriptor) = if (isDoubleSlot(f)) 2 else 1
+
+  /**
+   * A parameter of a message's case class: a leaf holding a value of the
+   * message, or a group of parameters split out of a message too large for one
+   * case class.
+   */
+  private[codegen] sealed trait MessageMember {
+    import MessageMember.*
+
+    def scalaName: String = this match {
+      case Field(field) => field.scalaName
+      case Oneof(oneof) => oneof.scalaName
+      case Group(_, parameterName, _) => parameterName
+    }
+
+    def slots: Int = this match {
+      case Field(field) => parameterSlots(field)
+      case _ => 1
+    }
+
+    def hasDefault: Boolean = this match {
+      case Field(field) => !(field.isRequiredByFieldBehavior && !field.isCollection)
+      case Oneof(oneof) => !oneof.isMarkedRequired
+      case Group(_, _, members) => members.forall(_.hasDefault)
+    }
+
+    def comment: Option[String] = this match {
+      case Field(field) => field.comment
+      case Oneof(oneof) => oneof.comment
+      case Group(_, _, _) => None
+    }
+  }
+  private[codegen] object MessageMember {
+    sealed trait Leaf extends MessageMember
+    case class Field(field: Descriptors.FieldDescriptor) extends Leaf
+    case class Oneof(oneof: Descriptors.OneofDescriptor) extends Leaf
+    case class Group(name: String, parameterName: String, members: List[MessageMember]) extends MessageMember
+  }
+
+  private def printParameter(m: Descriptors.Descriptor, member: MessageMember): List[String] = {
+    val (scalaType, defaultValue, deprecated) = member match {
+      case MessageMember.Field(field) => (field.scalaTypeName, field.scalaDefaultValue, field.getOptions.getDeprecated)
+      case MessageMember.Oneof(oneof) => (s"_root_.scala.Option[${oneof.scalaType}]", "_root_.scala.None", false)
+      case MessageMember.Group(name, _, _) => (s"${m.scalaType}.$name", s"${m.scalaType}.$name()", false)
+    }
+    val default = if (member.hasDefault) s" = $defaultValue" else ""
+    List(
+      Option.when(deprecated)(deprecatedAnnotation),
+      Some(s"${Utils.escapeScalaKeyword(member.scalaName)}: $scalaType$default,"),
+    ).flatten
+  }
+
   private def printMessage(m: Descriptors.Descriptor): String = {
     validateFieldNames(m)
+    val parameters = messageLayout(m)
+    val companionMembers =
+      realOneofs(m).map(printOneof(_)) ++
+        m.getEnumTypes.asScala.map(printEnum(_)) ++
+        m.getNestedTypes.asScala.filterNot(_.getOptions.getMapEntry).map(printMessage(_)) ++
+        groups(parameters).map { group =>
+          printProduct(
+            m = m,
+            name = group.name,
+            parameters = group.members,
+            comment = None,
+            deprecated = false,
+            companionMembers = Nil,
+          )
+        } ++
+        List(
+          if (CodecGenerator.isSplit(parameters)) {
+            val codec = s"${Utils.rootQualified(m.getFile.scalaPackage)}.${codecObjectName(m)}.messageCodec"
+            s"given messageCodec: _root_.zga.common.MessageCodec[${m.scalaType}] = $codec"
+          } else CodecGenerator.printMessageCodec(m, parameters),
+        )
+    printProduct(
+      m = m,
+      name = Utils.escapeScalaKeyword(m.getName),
+      parameters = parameters,
+      comment = Some(m.comment.getOrElse(m.getName)),
+      deprecated = m.getOptions.getDeprecated,
+      companionMembers = companionMembers,
+    )
+  }
 
-    def printField(f: Descriptors.FieldDescriptor) = List(
-      Option(f.getOptions.getDeprecated).filter(identity(_)).map(_ => deprecatedAnnotation),
-      Some {
-        val default =
-          if (f.isMarkedRequired && !f.isCollection) "" else s" = ${f.scalaDefaultValue}"
-        s"${Utils.escapeScalaKeyword(f.scalaName)}: ${f.scalaTypeName}$default,"
-      },
-    ).flatten
-
-    def printOneofParam(o: Descriptors.OneofDescriptor) = {
-      val default = if (o.isMarkedRequired) "" else " = _root_.scala.None"
-      List(s"${Utils.escapeScalaKeyword(o.scalaName)}: _root_.scala.Option[${o.scalaType}]$default,")
-    }
-
-    val messageName = Utils.escapeScalaKeyword(m.getName)
-    val oneofs = realOneofs(m)
-    val members = messageMembers(m)
-
-    val scaladoc = {
-      val comment = m.comment.getOrElse(m.getName)
-      val params = members.flatMap {
-        case Left(f) => f.comment.map(Utils.escapeScalaKeyword(f.scalaName) -> _)
-        case Right(o) => o.comment.map(Utils.escapeScalaKeyword(o.scalaName) -> _)
-      }.to(ListMap)
-      Comments.formatAsScaladoc(comment, params)
-    }
-
+  private def printProduct(
+    m: Descriptors.Descriptor,
+    name: String,
+    parameters: List[MessageMember],
+    comment: Option[String],
+    deprecated: Boolean,
+    companionMembers: Seq[String],
+  ): String = {
+    val params = parameters.flatMap(member => member.comment.map(Utils.escapeScalaKeyword(member.scalaName) -> _)).to(ListMap)
     val memberDoc = List(
-      Some(scaladoc),
-      Option(m.getOptions.getDeprecated).filter(identity(_)).map(_ => deprecatedAnnotation),
+      Option.when(comment.nonEmpty || params.nonEmpty)(Comments.formatAsScaladoc(comment.getOrElse(""), params)),
+      Option.when(deprecated)(deprecatedAnnotation),
     ).flatten.mkString("\n")
-
-    val parameters = members.flatMap {
-      case Left(f) => printField(f)
-      case Right(o) => printOneofParam(o)
+    val exports = parameters.collect { case MessageMember.Group(_, parameterName, _) =>
+      s"  export ${Utils.escapeScalaKeyword(parameterName)}.*"
     }
-
+    val body = if (exports.isEmpty) "" else exports.mkString(" {\n", "\n", "\n}")
     s"""
-      |${memberDoc}
-      |case class $messageName(
-      |  ${parameters.mkString("\n  ")}
-      |)
-      |object $messageName {
-      |${oneofs.map(printOneof(_)).mkString("\n")}
-      |${m.getEnumTypes.asScala.map(printEnum(_)).mkString("\n")}
-      |${m.getNestedTypes.asScala.filterNot(_.getOptions.getMapEntry).map(printMessage(_)).mkString("\n")}
-      |${printMessageCodec(m)}
+      |$memberDoc
+      |case class $name(
+      |  ${parameters.flatMap(printParameter(m, _)).mkString("\n  ")}
+      |)$body
+      |object $name {
+      |${companionMembers.mkString("\n")}
       |}
       |""".stripMargin
+  }
+
+  private def groups(parameters: List[MessageMember]): List[MessageMember.Group] = parameters.flatMap {
+    case group: MessageMember.Group => group :: groups(group.members)
+    case _ => Nil
+  }
+
+  /**
+   * Fit every constructor to the JVM limit, including oneofs and any groups of
+   * groups.
+   */
+  private def messageLayout(m: Descriptors.Descriptor): List[MessageMember] = {
+    val usedTypes = mutable.Set.empty[String] ++
+      m.getEnumTypes.asScala.map(_.getName) ++
+      m.getNestedTypes.asScala.filterNot(_.getOptions.getMapEntry).map(_.getName) ++
+      realOneofs(m).map(_.scalaTypeName) ++ List(m.getName)
+    val usedParameters = mutable.Set.empty[String] ++ m.fields.map(_.scalaName) ++ realOneofs(m).map(_.scalaName)
+
+    def uniqueName(base: String, used: mutable.Set[String]): String = {
+      var name = base
+      while (used.contains(name)) name += "Group"
+      used += name
+      name
+    }
+
+    var groupIndex = 0
+    def fit(members: List[MessageMember]): List[MessageMember] = {
+      if (members.map(_.slots).sum <= MaxParameterSlots) members
+      else {
+        val grouped = Utils.chunkBy(members, MaxParameterSlots)(_.slots).map { chunk =>
+          groupIndex += 1
+          val name = uniqueName(s"Part$groupIndex", usedTypes)
+          val parameterName = uniqueName(name.head.toLower.toString + name.tail, usedParameters)
+          MessageMember.Group(name = name, parameterName = parameterName, members = chunk)
+        }
+        fit(grouped)
+      }
+    }
+    fit(messageMembers(m))
   }
 
   private def realOneofs(m: Descriptors.Descriptor) = m.getRealOneofs.asScala.toList
 
   /**
-   * A message's generated case class parameters in declaration order: each
-   * field that is not in a oneof, and each oneof, positioned at its first
-   * field.
+   * Fields and real oneofs in declaration order, each oneof positioned at its
+   * first field.
    */
-  private def messageMembers(
-    m: Descriptors.Descriptor,
-  ): List[Either[Descriptors.FieldDescriptor, Descriptors.OneofDescriptor]] = {
-    val emitted = scala.collection.mutable.Set.empty[Int]
+  private def messageMembers(m: Descriptors.Descriptor): List[MessageMember] = {
+    val emitted = mutable.Set.empty[Int]
     m.fields.toList.flatMap { field =>
-      type Member = Either[Descriptors.FieldDescriptor, Descriptors.OneofDescriptor]
       Option(field.getRealContainingOneof) match {
-        case None => Some(Left(field): Member)
-        case Some(oneof) => Option.when(emitted.add(oneof.getIndex))(Right(oneof): Member)
+        case None => Some(MessageMember.Field(field))
+        case Some(oneof) => Option.when(emitted.add(oneof.getIndex))(MessageMember.Oneof(oneof))
       }
     }
   }
@@ -279,23 +397,16 @@ object Generator {
     val fields = o.getFields.asScala.toList
 
     val cases = fields.map { field =>
-      s"case class ${field.oneofCaseName}(value: ${field.scalaType}) extends $oneofType"
-    }
-
-    val caseCodecs = fields.map { field =>
-      s"_root_.zga.common.OneofCodec.Case.derived[$oneofType.${field.oneofCaseName}](${field.getNumber})"
+      s"""case class ${field.oneofCaseName}(value: ${field.scalaType}) extends $oneofType {
+        |${CodecGenerator.printOneofCase(field)}
+        |}""".stripMargin
     }
 
     s"""
       |${o.comment.map(Comments.formatAsScaladoc(_, ListMap.empty)).getOrElse("")}
       |sealed trait ${o.scalaTypeName} extends _root_.zga.common.Oneof
       |object ${o.scalaTypeName} {
-      |  ${cases.mkString("\n  ")}
-      |
-      |  given oneofCodec: _root_.zga.common.OneofCodec[$oneofType] =
-      |    _root_.zga.common.OneofCodec.derived[$oneofType](
-      |      ${caseCodecs.mkString(",\n      ")},
-      |    )
+      |${cases.mkString("\n\n")}
       |}
       |""".stripMargin
   }
@@ -376,22 +487,4 @@ object Generator {
       }
     }
   }
-
-  private def printMessageCodec(m: Descriptors.Descriptor): String = {
-    val scalaType = m.scalaType
-    s"""given messageCodec: _root_.zga.common.MessageCodec[$scalaType] =
-      |  _root_.zga.common.MessageCodec.derived[$scalaType](${messageDescriptorRef(m)})""".stripMargin
-  }
-
-  private def messageDescriptorRef(m: Descriptors.Descriptor): String = {
-    val file = m.getFile
-    val base = s"${Utils.rootQualified(file.scalaPackage)}.${file.descriptorObjectName}.javaDescriptor.getMessageTypes"
-
-    def path(d: Descriptors.Descriptor): List[Int] =
-      if (d.getContainingType == null) List(d.getIndex) else path(d.getContainingType) :+ d.getIndex
-
-    val indices = path(m)
-    indices.tail.foldLeft(s"$base.get(${indices.head})")((ref, index) => s"$ref.getNestedTypes.get($index)")
-  }
-
 }
