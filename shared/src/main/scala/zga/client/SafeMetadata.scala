@@ -6,7 +6,7 @@ import zio.Trace
 import zio.ZIO
 
 /**
- * Thread-safe access to a mutable [[Metadata]].
+ * Thread-safe access to a mutable [[io.grpc.Metadata]].
  */
 final class SafeMetadata private (
   private val semaphore: Semaphore,
