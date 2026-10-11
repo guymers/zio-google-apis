@@ -17,25 +17,12 @@ import scala.util.Try
  * Ability to serialize a message to/from protobuf bytes. Implemented by the
  * generated code of each message.
  *
- * An abstract class rather than a trait, so that each generated codec does not
- * get its own copy of the concrete members.
+ * A codec is the companion object of its message, and Scala adds a static
+ * forwarder to the message's class for each public member of the companion, so
+ * the codec only declares what each message implements. The operations built on
+ * those are extension methods.
  */
 abstract class MessageCodec[T] {
-
-  final def toByteArray(value: T): Array[Byte] = {
-    val sizes = new Sizes
-    val bytes = new Array[Byte](serializedSize(value, sizes))
-    val output = CodedOutputStream.newInstance(bytes)
-    writeTo(output, value, sizes)
-    output.checkNoSpaceLeft()
-    bytes
-  }
-
-  final def parseFrom(bytes: Array[Byte]): T = parse(CodedInputStream.newInstance(bytes))
-
-  final def safeParseFrom(value: ByteString): Either[Throwable, T] = {
-    Try(parse(value.newCodedInput())).toEither
-  }
 
   /**
    * The number of bytes the fields of the message encode to, recording the
@@ -58,36 +45,54 @@ abstract class MessageCodec[T] {
   private[zga] def readFrom(reader: ProtoReader, value: T): T
 
   private[zga] def defaultValue: T
-
-  /**
-   * The size of the message as a field value, prefixed by its length.
-   */
-  private[zga] final def delimitedSize(value: T, sizes: Sizes): Int = sizes.delimited(serializedSize(value, sizes))
-
-  private[zga] final def writeDelimited(output: CodedOutputStream, value: T, sizes: Sizes): Unit = {
-    sizes.writeLength(output)
-    writeTo(output, value, sizes)
-  }
-
-  private[zga] final def readDelimited(reader: ProtoReader): T = readDelimited(reader, defaultValue)
-
-  private[zga] final def readDelimited(reader: ProtoReader, previous: T): T = reader.message(readFrom(reader, previous))
-
-  private[zga] final def readDelimited(reader: ProtoReader, previous: Option[T]): T = previous match {
-    case Some(value) => readDelimited(reader, value)
-    case None => readDelimited(reader)
-  }
-
-  private def parse(input: CodedInputStream): T = {
-    val value = readFrom(ProtoReader(input), defaultValue)
-    input.checkLastTagWas(0)
-    value
-  }
 }
 
 object MessageCodec {
 
   def apply[T](using codec: MessageCodec[T]): MessageCodec[T] = codec
+
+  extension [T](codec: MessageCodec[T]) {
+
+    def toByteArray(value: T): Array[Byte] = {
+      val sizes = new Sizes
+      val bytes = new Array[Byte](codec.serializedSize(value, sizes))
+      val output = CodedOutputStream.newInstance(bytes)
+      codec.writeTo(output, value, sizes)
+      output.checkNoSpaceLeft()
+      bytes
+    }
+
+    def parseFrom(bytes: Array[Byte]): T = codec.parse(CodedInputStream.newInstance(bytes))
+
+    def safeParseFrom(value: ByteString): Either[Throwable, T] = {
+      Try(codec.parse(value.newCodedInput())).toEither
+    }
+
+    /**
+     * The size of the message as a field value, prefixed by its length.
+     */
+    private[zga] def delimitedSize(value: T, sizes: Sizes): Int = sizes.delimited(codec.serializedSize(value, sizes))
+
+    private[zga] def writeDelimited(output: CodedOutputStream, value: T, sizes: Sizes): Unit = {
+      sizes.writeLength(output)
+      codec.writeTo(output, value, sizes)
+    }
+
+    private[zga] def readDelimited(reader: ProtoReader): T = codec.readDelimited(reader, codec.defaultValue)
+
+    private[zga] def readDelimited(reader: ProtoReader, previous: T): T = reader.message(codec.readFrom(reader, previous))
+
+    private[zga] def readDelimited(reader: ProtoReader, previous: Option[T]): T = previous match {
+      case Some(value) => codec.readDelimited(reader, value)
+      case None => codec.readDelimited(reader)
+    }
+
+    private def parse(input: CodedInputStream): T = {
+      val value = codec.readFrom(ProtoReader(input), codec.defaultValue)
+      input.checkLastTagWas(0)
+      value
+    }
+  }
 
   /**
    * The codec of a message without fields, which skips the fields it reads.

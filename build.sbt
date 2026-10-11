@@ -60,6 +60,9 @@ libraryDependencies ++= Seq(
 
 mimaPreviousArtifacts := previousStableVersion.value.map(organization.value %% moduleName.value % _).toSet
 
+// Maven Central requires a javadoc jar but not its contents, the scaladoc of the generated code is hundreds of MB
+Compile / packageDoc / mappings := Seq.empty
+
 lazy val noPublishSettings = Seq(
   publish / skip := true,
   mimaPreviousArtifacts := Set.empty,

@@ -61,7 +61,14 @@ private[codegen] object CodecGenerator {
     writeBytes: Int,
   )
 
-  def printMessageCodec(m: Descriptors.Descriptor, parameters: List[MessageMember]): String = {
+  /**
+   * The codec of a message, as the members of the object that holds it, and the
+   * parent and annotation of that object. The object itself is the codec,
+   * rather than an anonymous class of its own, which saves a class per message.
+   */
+  case class Codec(parent: Option[String], members: String, annotation: String)
+
+  def printMessageCodec(m: Descriptors.Descriptor, parameters: List[MessageMember]): Codec = {
     val scalaType = m.scalaType
     val leaves = leavesOf(parameters, "value")
     val fragments = leaves.map((leaf, path) => leaf -> leafFragments(leaf, path)).toMap
@@ -72,7 +79,8 @@ private[codegen] object CodecGenerator {
       case (MessageMember.Oneof(_), _) => false
     }
     val annotation = if (deprecated) "@_root_.scala.annotation.nowarn(\"cat=deprecation\")\n" else ""
-    val codec = if (leaves.isEmpty) s"$MessageCodec.empty($default)"
+    val declaration = s"given messageCodec: $MessageCodec[$scalaType] ="
+    if (leaves.isEmpty) Codec(parent = None, members = s"$declaration $MessageCodec.empty($default)", annotation = "")
     else {
       val written = leaves.sortBy((leaf, _) => number(leaf)).map((leaf, _) => fragments(leaf))
       val constructed = construct(m, scalaType, parameters, fragments(_).argument)
@@ -80,11 +88,12 @@ private[codegen] object CodecGenerator {
         printSize(scalaType, written) ++
         printWrite(scalaType, written) ++
         printRead(scalaType, leaves.map((leaf, _) => fragments(leaf)), constructed)
-      s"""new $MessageCodec[$scalaType] {
-        |${methods.mkString("\n\n")}
-        |}""".stripMargin
+      Codec(
+        parent = Some(s"$MessageCodec[$scalaType]"),
+        members = (methods :+ s"inline $declaration this").mkString("\n\n"),
+        annotation = annotation,
+      )
     }
-    s"${annotation}given messageCodec: $MessageCodec[$scalaType] = $codec"
   }
 
   /**
@@ -182,9 +191,10 @@ private[codegen] object CodecGenerator {
           |  case _ => false
           |}""".stripMargin
       }
+      // a proto name cannot start with an underscore, so the class cannot collide with a nested type of the companion
       List(
         s"""$signature = {
-          |  val fields = new Fields(reader, value)
+          |  val fields = new _Fields(reader, value)
           |  var done = false
           |  while (!done) {
           |    val tag = reader.input.readTag()
@@ -192,7 +202,7 @@ private[codegen] object CodecGenerator {
           |  }
           |  fields.result
           |}""".stripMargin,
-        s"""private final class Fields(reader: $ProtoReader, value: $scalaType) {
+        s"""private final class _Fields(reader: $ProtoReader, value: $scalaType) {
           |  val input = reader.input
           |$variables
           |
