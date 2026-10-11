@@ -24,6 +24,7 @@ object ZioGrpcGenerator {
   private val ZStream = "_root_.zio.stream.ZStream"
   private val MessageCodec = "_root_.zga.common.MessageCodec"
   private val RoutingType = "_root_.zga.client.Routing"
+  private val WithAuth = "withAuth"
 
   def hasServices(f: Descriptors.FileDescriptor): Boolean = !f.getServices.isEmpty
 
@@ -52,6 +53,9 @@ object ZioGrpcGenerator {
   }
 
   private def validateMethodNames(service: ServiceDescriptor, methods: List[MethodDescriptor]) = {
+    methods.find(methodName(_) == WithAuth).foreach { method =>
+      throw IllegalArgumentException(s"${service.getFullName} has method '${method.getName}', which collides with the generated '$WithAuth'")
+    }
     methods.groupBy(methodConstant).collectFirst {
       case (name, duplicates) if duplicates.length > 1 => (name, duplicates)
     }.foreach { case (name, duplicates) =>
@@ -71,28 +75,53 @@ object ZioGrpcGenerator {
     val methods = service.getMethods.asScala.toList
     validateMethodNames(service, methods)
 
-    val implementations = methods.map(implementation(_, client, auth, service.getFullName, routingParameters)).mkString("\n")
-    val interfaces = methods.map(interface(_, auth)).mkString("\n")
+    val implementations = methods.map(implementation(_, client, service.getFullName, routingParameters)).mkString("\n")
+    val interfaces = methods.map(interface).mkString("\n")
     val grpcMembers = methods.flatMap(m => methodDescriptor(service, m) :: routingConstant(m, routingParameters).toList).mkString("\n\n")
     val grpcService = serviceDescriptor(service)
     val serviceDoc = scaladoc(service.comment)
 
     s"""class ${client}Live(
       |  channel: $channel,
+      |  auth: $auth,
       |  options: $CallOptions
       |) extends $client {
       |  import _root_.zga.error.syntax.*
+      |
+      |  def $WithAuth(auth: $auth): $client = {
+      |    new ${client}Live(channel, auth, options)
+      |  }
       |
       |  $implementations
       |}
       |
       |object $client {
       |
-      |  def create(
+      |  /**
+      |   * A client that has not been given authentication yet.
+      |   */
+      |  final class Unauthenticated(
       |    channel: $channel,
       |    options: $CallOptions
+      |  ) {
+      |    def $WithAuth(auth: $auth): $client = {
+      |      create(channel, auth, options)
+      |    }
+      |  }
+      |
+      |  def unauthenticated(
+      |    channel: $channel,
+      |    options: $CallOptions
+      |  ): Unauthenticated = {
+      |    new Unauthenticated(channel, options)
+      |  }
+      |
+      |  def create(
+      |    channel: $channel,
+      |    auth: $auth,
+      |    options: $CallOptions
       |  ): $client = {
-      |    new ${client}Live(channel, options)
+      |    new ${client}Live(channel, auth, options)
       |  }
       |
       |  object Grpc {
@@ -103,13 +132,20 @@ object ZioGrpcGenerator {
       |
       |  def layer(
       |    channel: $channel,
+      |    auth: $auth,
       |    options: $CallOptions
       |  ): $ZLayer[_root_.scala.Any, _root_.scala.Nothing, $client] = {
-      |    $ZLayer.succeed(create(channel, options))
+      |    $ZLayer.succeed(create(channel, auth, options))
       |  }
       |}
       |
       |$serviceDoc trait $client {
+      |  /**
+      |   * Returns a client that shares this client's channel and options, but
+      |   * authenticates with `auth`.
+      |   */
+      |  def $WithAuth(auth: $auth): $client
+      |
       |  $interfaces
       |}
       |""".stripMargin
@@ -119,9 +155,8 @@ object ZioGrpcGenerator {
     comment.map(Comments.formatAsScaladoc(_, ListMap.empty) + "\n").getOrElse("")
   }
 
-  private def interface(method: MethodDescriptor, auth: String) = {
+  private def interface(method: MethodDescriptor) = {
     s"""${scaladoc(method.comment)}def ${methodName(method)}${methodTypeParams(method)}(
-      |  auth: $auth,
       |  request: ${methodInType(method)},
       |  deadline: => _root_.scala.Option[$Deadline] = _root_.scala.None
       |)(using $Trace): ${methodOutType(method)}""".stripMargin
@@ -130,7 +165,6 @@ object ZioGrpcGenerator {
   private def implementation(
     method: MethodDescriptor,
     clientName: String,
-    auth: String,
     serviceName: String,
     routingParameters: RoutingParameters,
   ) = {
@@ -156,7 +190,6 @@ object ZioGrpcGenerator {
           |}""".stripMargin
       }
     s"""def ${methodName(method)}${methodTypeParams(method)}(
-      |  auth: $auth,
       |  request: ${methodInType(method)},
       |  deadline: => _root_.scala.Option[$Deadline] = _root_.scala.None
       |)(using $Trace): ${methodOutType(method)} = {
