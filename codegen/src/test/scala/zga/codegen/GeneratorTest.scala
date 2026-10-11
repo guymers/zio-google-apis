@@ -388,28 +388,50 @@ object GeneratorTest extends ZIOSpecDefault {
         val deprecated = FieldOptions.newBuilder.setDeprecated(true).build()
         assertTrue(generate(List(stringField(options =
           Some(deprecated),
-        ))).contains("@_root_.scala.annotation.nowarn(\"cat=deprecation\")\ngiven messageCodec")) &&
+        ))).contains("@_root_.scala.annotation.nowarn(\"cat=deprecation\")\nobject Message extends")) &&
         assertTrue(!generate(List(stringField())).contains("nowarn"))
+      },
+      test("a message without fields is a plain class with the empty codec") {
+        val output = generate(Nil)
+        assertTrue(output.contains("final class Message private () extends _root_.zga.common.EmptyMessage\nobject Message {\n")) &&
+        assertTrue(output.contains("def apply(): _root_.test.Message = new Message()")) &&
+        assertTrue(
+          output.contains("given messageCodec: _root_.zga.common.MessageCodec[_root_.test.Message] = _root_.zga.common.MessageCodec.empty(_root_.test.Message())"),
+        ) &&
+        assertTrue(!output.contains("case class"))
       },
     ),
     suite("enums")(
       test("an open enum keeps unrecognized values") {
         val output = Generator.printFile(Descriptors.FileDescriptor.buildFrom(enumFile("VALUE"), Array.empty))
-        assertTrue(output.contains("sealed trait Kind derives _root_.scala.CanEqual {")) &&
+        assertTrue(output.contains("sealed trait Kind extends _root_.zga.common.ProtoEnum\n")) &&
+        assertTrue(output.contains("inline given _root_.scala.CanEqual[_root_.test.Kind, _root_.test.Kind] = _root_.scala.CanEqual.derived")) &&
         assertTrue(output.contains("enum Recognized extends _root_.test.Kind {")) &&
         assertTrue(output.contains("case VALUE\n")) &&
         assertTrue(output.contains("def value: _root_.scala.Int = ordinal")) &&
         assertTrue(output.contains("export Recognized.*")) &&
-        assertTrue(output.contains("case class Unrecognized private[Kind] (value: _root_.scala.Int) extends _root_.test.Kind")) &&
-        assertTrue(output.contains("def fromValue(v: _root_.scala.Int): _root_.test.Kind = valueMap.getOrElse(v, Unrecognized(v))"))
+        assertTrue(
+          output.contains(
+            "final class Unrecognized private[Kind] (value: _root_.scala.Int) extends _root_.zga.common.UnrecognizedValue(value) with _root_.test.Kind",
+          ),
+        ) &&
+        assertTrue(
+          output.contains("def fromValue(v: _root_.scala.Int): _root_.test.Kind = if (v >= 0 && v < 1) Recognized.fromOrdinal(v) else new Unrecognized(v)"),
+        ) &&
+        assertTrue(!output.contains("valueMap"))
       },
       test("a closed enum is a plain enum") {
         val output = Generator.printFile(Descriptors.FileDescriptor.buildFrom(enumFile("VALUE", "proto2"), Array.empty))
-        assertTrue(output.contains("enum Kind derives _root_.scala.CanEqual {")) &&
+        assertTrue(output.contains("enum Kind extends _root_.zga.common.ProtoEnum {")) &&
+        assertTrue(output.contains("inline given _root_.scala.CanEqual[Kind, Kind] = _root_.scala.CanEqual.derived")) &&
         assertTrue(output.contains("case VALUE\n")) &&
         assertTrue(output.contains("def value: _root_.scala.Int = ordinal")) &&
         assertTrue(!output.contains("Unrecognized")) &&
-        assertTrue(output.contains("def fromValue(v: _root_.scala.Int): _root_.scala.Option[Kind] = valueMap.get(v)"))
+        assertTrue(
+          output.contains(
+            "def fromValue(v: _root_.scala.Int): _root_.scala.Option[Kind] = if (v >= 0 && v < 1) _root_.scala.Some(Kind.fromOrdinal(v)) else _root_.scala.None",
+          ),
+        )
       },
       test("values numbered other than by ordinal look up their numbers") {
         val proto = enumFile("VALUE").toBuilder
@@ -420,7 +442,15 @@ object GeneratorTest extends ZIOSpecDefault {
         assertTrue(open.contains("def value: _root_.scala.Int = numbers(ordinal)")) &&
         assertTrue(open.contains("private val numbers = _root_.scala.Array[_root_.scala.Int](0, 5)")) &&
         assertTrue(closed.contains("def value: _root_.scala.Int = Kind.numbers(ordinal)")) &&
-        assertTrue(closed.contains("private val numbers = _root_.scala.Array[_root_.scala.Int](0, 5)"))
+        assertTrue(closed.contains("private val numbers = _root_.scala.Array[_root_.scala.Int](0, 5)")) &&
+        assertTrue(open.contains("private val valueMap = _root_.zga.common.ProtoEnum.valueMap(Recognized.values)")) &&
+        assertTrue(closed.contains("private val valueMap = _root_.zga.common.ProtoEnum.valueMap(Kind.values)")) &&
+        assertTrue(
+          open.contains(
+            "= valueMap.get(v) match { case _root_.scala.Some(value) => value; case _root_.scala.None => new Unrecognized(v) }",
+          ),
+        ) &&
+        assertTrue(closed.contains("def fromValue(v: _root_.scala.Int): _root_.scala.Option[Kind] = valueMap.get(v)\n"))
       },
       test("an open enum rejects a value named after its nested types") {
         assertTrue(List("Recognized", "Unrecognized").forall { name =>
@@ -567,7 +597,7 @@ object GeneratorTest extends ZIOSpecDefault {
           output.contains("private def writeTo1(output: _root_.com.google.protobuf.CodedOutputStream, value: _root_.test.Message, @_root_.scala.annotation.unused sizes: _root_.zga.common.Sizes)"),
         ) &&
         assertTrue(output.contains("done = tag == 0 || !(fields.read0(tag) || fields.read1(tag) || ")) &&
-        assertTrue(output.contains("private final class Fields(reader: _root_.zga.common.ProtoReader, value: _root_.test.Message) {")) &&
+        assertTrue(output.contains("private final class _Fields(reader: _root_.zga.common.ProtoReader, value: _root_.test.Message) {")) &&
         assertTrue(
           trimmed(output).contains("def read0(tag: _root_.scala.Int): _root_.scala.Boolean = tag match {\ncase 10 =>\n_field1 = input.readStringRequireUtf8()\ntrue\n"),
         )
@@ -575,10 +605,11 @@ object GeneratorTest extends ZIOSpecDefault {
       test("a message with fewer fields keeps each of the codec's methods whole") {
         val fields = (1 to 20).map(index => stringField(name = s"field$index", number = index)).toList
         val output = generate(fields)
-        assertTrue(!output.contains("serializedSize0"), !output.contains("writeTo0"), !output.contains("class Fields")) &&
+        assertTrue(!output.contains("serializedSize0"), !output.contains("writeTo0"), !output.contains("class _Fields")) &&
         assertTrue(
-          output.contains("given messageCodec: _root_.zga.common.MessageCodec[_root_.test.Message] = new _root_.zga.common.MessageCodec[_root_.test.Message] {"),
+          output.contains("object Message extends _root_.zga.common.MessageCodec[_root_.test.Message] {"),
         ) &&
+        assertTrue(output.contains("inline given messageCodec: _root_.zga.common.MessageCodec[_root_.test.Message] = this")) &&
         assertTrue(generateCodecFiles(fields).isEmpty)
       },
       test("a split codec is defined in a file of its own") {
@@ -590,10 +621,12 @@ object GeneratorTest extends ZIOSpecDefault {
         assertTrue(
           trimmed(output).contains("\ngiven messageCodec: _root_.zga.common.MessageCodec[_root_.test.Message] = _root_.test.MessageMessageCodec.messageCodec\n"),
         ) &&
-        assertTrue(!output.contains("serializedSize0"), !output.contains("new _root_.zga.common.MessageCodec")) &&
-        assertTrue(codec.startsWith("\npackage test\n\nprivate[test] object MessageMessageCodec {\n")) &&
+        assertTrue(!output.contains("serializedSize0"), !output.contains("extends _root_.zga.common.MessageCodec")) &&
         assertTrue(
-          trimmed(codec).contains("\ngiven messageCodec: _root_.zga.common.MessageCodec[_root_.test.Message] = new _root_.zga.common.MessageCodec[_root_.test.Message] {"),
+          codec.startsWith("\npackage test\n\nprivate[test] object MessageMessageCodec extends _root_.zga.common.MessageCodec[_root_.test.Message] {\n"),
+        ) &&
+        assertTrue(
+          trimmed(codec).contains("\ninline given messageCodec: _root_.zga.common.MessageCodec[_root_.test.Message] = this\n"),
         ) &&
         assertTrue(codec.contains("private def serializedSize0("))
       },
@@ -614,7 +647,7 @@ object GeneratorTest extends ZIOSpecDefault {
       test("a split codec in the default package is public") {
         val fields = (1 to 300).map(index => stringField(name = s"field$index", number = index)).toList
         val codec = generateCodecFiles(fields, pkg = "", javaPackage = None)("MessageMessageCodec.scala")
-        assertTrue(codec.startsWith("\n\nobject MessageMessageCodec {\n")) &&
+        assertTrue(codec.startsWith("\n\nobject MessageMessageCodec extends _root_.zga.common.MessageCodec[_root_.Message] {\n")) &&
         assertTrue(generate(fields, pkg = "", javaPackage = None).contains("= _root_.MessageMessageCodec.messageCodec\n"))
       },
       test("chunks oneof parameters as well as ordinary fields") {
