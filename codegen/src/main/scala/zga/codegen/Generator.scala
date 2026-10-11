@@ -235,13 +235,17 @@ object Generator {
   }
 
   /**
-   * The JVM limits a method's parameter list to 254 slots, and a `Long` or a
-   * `Double` takes two. A message over the limit is generated as consecutive
-   * chunks, each small enough to be one case class, and the message exports the
-   * chunks' fields so they read as if the message were one case class. The
-   * message's codec reads and writes the chunks' fields as its own.
+   * The JVM limits a method's parameter list to 254 slots, a `Long` or a
+   * `Double` taking two, but HotSpot's C2 compiler gives up on a method with
+   * about 70 parameters or more ("unsupported calling sequence"), leaving it,
+   * and every method that calls it, to slower code. So a constructor is kept
+   * well under that, counting slots as the JVM does. A message over the limit
+   * is generated as consecutive chunks, each small enough to be one case class,
+   * and the message exports the chunks' fields so they read as if the message
+   * were one case class. The message's codec reads and writes the chunks'
+   * fields as its own.
    */
-  private val MaxParameterSlots = 254
+  private val MaxParameterSlots = 64
 
   private def isDoubleSlot(f: Descriptors.FieldDescriptor) = {
     !f.isCollection &&

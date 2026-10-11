@@ -6,6 +6,7 @@ import com.google.protobuf.Descriptors.FieldDescriptor.Type
 import com.google.protobuf.WireFormat
 import zga.codegen.Generator.MessageMember
 
+import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
 
 private[codegen] object CodecGenerator {
@@ -42,8 +43,11 @@ private[codegen] object CodecGenerator {
    * The fragments of a leaf in each of the codec's methods.
    *
    * @param variable
-   *   the declaration of the variable that `readFrom` reads the leaf into,
-   *   starting from the value being merged into
+   *   the name of the variable that `readFrom` reads the leaf into
+   * @param variableType
+   *   the type of the variable
+   * @param initial
+   *   the initial value of the variable, of the value being merged into or null
    * @param argument
    *   the constructor argument of the variable
    * @param default
@@ -53,13 +57,20 @@ private[codegen] object CodecGenerator {
    */
   private case class LeafFragments(
     variable: String,
+    variableType: String,
+    initial: String,
     cases: List[ReadCase],
     argument: String,
     default: String,
     size: String,
     write: String,
     writeBytes: Int,
-  )
+  ) {
+    def declaration: String = s"var $variable: $variableType = $initial"
+
+    // a builder starts as null, rather than from the value being merged into
+    def copiesValue: Boolean = initial != "null"
+  }
 
   /**
    * The codec of a message, as the members of the object that holds it, and the
@@ -82,12 +93,11 @@ private[codegen] object CodecGenerator {
     val declaration = s"given messageCodec: $MessageCodec[$scalaType] ="
     if (leaves.isEmpty) Codec(parent = None, members = s"$declaration $MessageCodec.empty($default)", annotation = "")
     else {
-      val written = leaves.sortBy((leaf, _) => number(leaf)).map((leaf, _) => fragments(leaf))
-      val constructed = construct(m, scalaType, parameters, fragments(_).argument)
+      val written = leaves.sortBy((leaf, _) => number(leaf))
       val methods = List(s"override private[zga] val defaultValue: $scalaType = $default") ++
-        printSize(scalaType, written) ++
-        printWrite(scalaType, written) ++
-        printRead(scalaType, leaves.map((leaf, _) => fragments(leaf)), constructed)
+        printSize(scalaType, written, fragments(_).writeBytes) ++
+        printWrite(scalaType, written, fragments(_).writeBytes) ++
+        printRead(m, parameters, fragments)
       Codec(
         parent = Some(s"$MessageCodec[$scalaType]"),
         members = (methods :+ s"inline $declaration this").mkString("\n\n"),
@@ -123,16 +133,17 @@ private[codegen] object CodecGenerator {
     case MessageMember.Oneof(oneof) => oneof.getFields.asScala.map(_.getNumber).min
   }
 
-  private def printSize(scalaType: String, written: List[LeafFragments]): List[String] = {
-    def method(signature: String, leaves: List[LeafFragments]) = {
+  private def printSize(scalaType: String, written: List[(MessageMember.Leaf, String)], bytes: MessageMember.Leaf => Int): List[String] = {
+    def method(signature: String, leaves: List[(MessageMember.Leaf, String)]) = {
+      val (locals, fragments) = withGroupLocals(leaves)
       s"""$signature: _root_.scala.Int = {
-        |  var size = 0
-        |${leaves.map(_.size).mkString("\n")}
+        |${(locals :+ "var size = 0").mkString("\n")}
+        |${fragments.map(_.size).mkString("\n")}
         |  size
         |}""".stripMargin
     }
     val signature = s"override private[zga] def serializedSize(value: $scalaType, sizes: $Sizes)"
-    Utils.chunkBy(written, MaxMethodBytes)(_.writeBytes) match {
+    Utils.chunkBy(written, MaxMethodBytes)((leaf, _) => bytes(leaf)) match {
       case List(leaves) => List(method(signature, leaves))
       case parts =>
         val calls = parts.indices.map(i => s"serializedSize$i(value, sizes)").mkString(" +\n")
@@ -142,21 +153,50 @@ private[codegen] object CodecGenerator {
     }
   }
 
-  private def printWrite(scalaType: String, written: List[LeafFragments]): List[String] = {
+  private def printWrite(scalaType: String, written: List[(MessageMember.Leaf, String)], bytes: MessageMember.Leaf => Int): List[String] = {
     def method(signature: String, statements: List[String]) = {
       s"""$signature: _root_.scala.Unit = {
         |${statements.mkString("\n")}
         |}""".stripMargin
     }
+    def writes(leaves: List[(MessageMember.Leaf, String)]) = {
+      val (locals, fragments) = withGroupLocals(leaves)
+      locals ++ fragments.map(_.write)
+    }
     val signature = s"override private[zga] def writeTo(output: $CodedOutput, value: $scalaType, sizes: $Sizes)"
-    Utils.chunkBy(written, MaxMethodBytes)(_.writeBytes) match {
-      case List(leaves) => List(method(signature, leaves.map(_.write)))
+    Utils.chunkBy(written, MaxMethodBytes)((leaf, _) => bytes(leaf)) match {
+      case List(leaves) => List(method(signature, writes(leaves)))
       case parts =>
         val calls = parts.indices.map(i => s"writeTo$i(output, value, sizes)").toList
         method(signature, calls) :: parts.zipWithIndex.map { (leaves, i) =>
-          method(s"private def writeTo$i(output: $CodedOutput, value: $scalaType, $PartSizes)", leaves.map(_.write))
+          method(s"private def writeTo$i(output: $CodedOutput, value: $scalaType, $PartSizes)", writes(leaves))
         }
     }
+  }
+
+  /**
+   * The fragments of leaves that read each group they are in once, into a
+   * local, rather than once for each leaf: a group's accessor is a call that
+   * the JIT does not inline into a method with many of them.
+   */
+  private def withGroupLocals(leaves: List[(MessageMember.Leaf, String)]): (List[String], List[LeafFragments]) = {
+    val (locals, paths) = groupLocals(leaves.map(_._2))
+    (locals, leaves.zip(paths).map { case ((leaf, _), path) => leafFragments(leaf, path) })
+  }
+
+  /**
+   * Paths through groups rewritten to start from a local of their group, and
+   * the declarations of those locals.
+   */
+  private def groupLocals(paths: List[String]): (List[String], List[String]) = {
+    val locals = mutable.LinkedHashMap.empty[String, String]
+    val rewritten = paths.map { path =>
+      val i = path.lastIndexOf('.')
+      val group = path.substring(0, i)
+      if (!group.contains('.')) path
+      else locals.getOrElseUpdate(group, group.replace('.', '_')) + path.substring(i)
+    }
+    (locals.map((group, local) => s"val $local = $group").toList, rewritten)
   }
 
   /**
@@ -164,11 +204,19 @@ private[codegen] object CodecGenerator {
    * in one method, into the variables of a class whose methods each read a part
    * of the tags.
    */
-  private def printRead(scalaType: String, leaves: List[LeafFragments], constructed: String): List[String] = {
-    val variables = leaves.map(_.variable).mkString("\n")
+  private def printRead(
+    m: Descriptors.Descriptor,
+    parameters: List[MessageMember],
+    fragments: MessageMember.Leaf => LeafFragments,
+  ): List[String] = {
+    val scalaType = m.scalaType
+    val leaves = leavesOf(parameters, "value").map((leaf, _) => fragments(leaf))
+    val variables = leaves.map(_.declaration).mkString("\n")
     val signature = s"override private[zga] def readFrom(reader: $ProtoReader, value: $scalaType): $scalaType"
+    val hasGroups = parameters.exists(_.isInstanceOf[MessageMember.Group])
     val cases = leaves.flatMap(_.cases)
-    if (cases.map(_.bytes).sum + leaves.length * VariableBytes <= MaxMethodBytes) {
+    if (!hasGroups && cases.map(_.bytes).sum + leaves.length * VariableBytes <= MaxMethodBytes) {
+      val constructed = construct(m, scalaType, parameters, fragments(_).argument)
       List(s"""$signature = {
         |  val input = reader.input
         |$variables
@@ -183,6 +231,13 @@ private[codegen] object CodecGenerator {
         |  $constructed
         |}""".stripMargin)
     } else {
+      val groups = groupsOf(parameters, "value", None)
+      val groupOf = groups.flatMap(group => group.leaves.map(_ -> group.name)).toMap
+      // a leaf of a group copies the group from the value being merged into when it is first read
+      val cases = leavesOf(parameters, "value").flatMap { (leaf, _) =>
+        val leafCases = fragments(leaf).cases
+        groupOf.get(leaf).fold(leafCases)(group => leafCases.map(c => c.copy(read = s"_touch_$group(); ${c.read}", bytes = c.bytes + TouchBytes)))
+      }
       val parts = Utils.chunkBy(cases, MaxMethodBytes)(_.bytes)
       val reads = parts.indices.map(i => s"fields.read$i(tag)").mkString(" || ")
       val readMethods = parts.zipWithIndex.map { (cases, i) =>
@@ -191,7 +246,33 @@ private[codegen] object CodecGenerator {
           |  case _ => false
           |}""".stripMargin
       }
-      // a proto name cannot start with an underscore, so the class cannot collide with a nested type of the companion
+      val (result, constructMethods) = constructInMethods(m, parameters, fragments(_).argument)
+      val (copied, uncopied) = leaves.partition(_.copiesValue)
+      // private, so that they are accessed directly rather than through accessor methods
+      val declarations = copied.map(l => s"private var ${l.variable}: ${l.variableType} = _root_.scala.compiletime.uninitialized") ++
+        uncopied.map(l => s"private ${l.declaration}") ++
+        groups.map(group => s"private var _touched_${group.name}: _root_.scala.Boolean = false")
+      // the variables of leaves outside of a group start from the value being merged into, copied in methods small
+      // enough for the JIT to inline the field accessors they call
+      val ungrouped = leavesOf(parameters, "value").collect { case (leaf, _) if !groupOf.contains(leaf) => fragments(leaf) }
+      val copyMethods = ungrouped.filter(_.copiesValue).grouped(CopiesPerMethod).toList.zipWithIndex.map { (leaves, i) =>
+        s"""private def _copy_$i(): _root_.scala.Unit = {
+          |${leaves.map(l => s"${l.variable} = ${l.initial}").mkString("\n")}
+          |}""".stripMargin
+      }
+      val touchMethods = groups.map { group =>
+        val copies = group.leaves.map(leaf => (leaf, fragments(leaf))).collect {
+          case (leaf, l) if l.copiesValue => s"${l.variable} = previous.${Utils.escapeScalaKeyword(leaf.scalaName)}"
+        }
+        s"""private def _touch_${group.name}(): _root_.scala.Unit = if (!_touched_${group.name}) {
+          |  _touched_${group.name} = true
+          |${group.parent.fold("")(parent => s"_touch_$parent()")}
+          |  val previous = ${group.path}
+          |${copies.mkString("\n")}
+          |}""".stripMargin
+      }
+      // a proto name cannot start with an underscore, so the class cannot collide with a nested type of the companion,
+      // and a Scala field name has no underscores, so `_copy_N` and `_construct_PartN` cannot collide with a variable
       List(
         s"""$signature = {
           |  val fields = new _Fields(reader, value)
@@ -204,11 +285,18 @@ private[codegen] object CodecGenerator {
           |}""".stripMargin,
         s"""private final class _Fields(reader: $ProtoReader, value: $scalaType) {
           |  val input = reader.input
-          |$variables
+          |${declarations.mkString("\n")}
+          |${copyMethods.indices.map(i => s"_copy_$i()").mkString("\n")}
+          |
+          |${copyMethods.mkString("\n\n")}
+          |
+          |${touchMethods.mkString("\n\n")}
           |
           |${readMethods.mkString("\n\n")}
           |
-          |  def result: $scalaType = $constructed
+          |  def result: $scalaType = $result
+          |
+          |${constructMethods.mkString("\n\n")}
           |}""".stripMargin,
       )
     }
@@ -233,7 +321,55 @@ private[codegen] object CodecGenerator {
         s"${Utils.escapeScalaKeyword(parameterName)} = ${construct(m, s"${m.scalaType}.$name", groupMembers, argument)}"
       case leaf: MessageMember.Leaf => s"${Utils.escapeScalaKeyword(leaf.scalaName)} = ${argument(leaf)}"
     }
-    if (values.isEmpty) s"$scalaType()" else values.mkString(s"$scalaType(\n  ", ",\n  ", ",\n)").replace("\n", "\n    ")
+    if (values.isEmpty) s"$scalaType()" else newInstance(scalaType, values)
+  }
+
+  // `new` rather than the companion's `apply`, which would pass on every argument again
+  private def newInstance(scalaType: String, values: List[String]) = {
+    values.mkString(s"new $scalaType(\n  ", ",\n  ", ",\n)").replace("\n", "\n    ")
+  }
+
+  /**
+   * Constructs a message with a method for each of its groups, so that the
+   * construction of a message too large for one method is not in one. A group
+   * none of whose leaves were read is that of the value being merged into.
+   */
+  private def constructInMethods(
+    m: Descriptors.Descriptor,
+    parameters: List[MessageMember],
+    argument: MessageMember.Leaf => String,
+  ): (String, List[String]) = {
+    def values(members: List[MessageMember], path: String): (List[String], List[String]) = {
+      val (arguments, methods) = members.map {
+        case MessageMember.Group(name, parameterName, groupMembers) =>
+          val groupType = s"${m.scalaType}.$name"
+          val method = s"_construct_$name"
+          val groupPath = s"$path.${Utils.escapeScalaKeyword(parameterName)}"
+          val (groupArguments, nested) = values(groupMembers, groupPath)
+          (
+            s"${Utils.escapeScalaKeyword(parameterName)} = if (_touched_$name) $method else $groupPath",
+            s"private def $method: $groupType = ${newInstance(groupType, groupArguments)}" :: nested,
+          )
+        case leaf: MessageMember.Leaf => (s"${Utils.escapeScalaKeyword(leaf.scalaName)} = ${argument(leaf)}", Nil)
+      }.unzip
+      (arguments, methods.flatten)
+    }
+    val (arguments, methods) = values(parameters, "value")
+    (newInstance(m.scalaType, arguments), methods)
+  }
+
+  /**
+   * A group of a message too large for one case class, with the leaves directly
+   * in it.
+   */
+  private case class GroupLeaves(name: String, path: String, parent: Option[String], leaves: List[MessageMember.Leaf])
+
+  private def groupsOf(members: List[MessageMember], path: String, parent: Option[String]): List[GroupLeaves] = members.flatMap {
+    case MessageMember.Group(name, parameterName, groupMembers) =>
+      val groupPath = s"$path.${Utils.escapeScalaKeyword(parameterName)}"
+      val leaves = groupMembers.collect { case leaf: MessageMember.Leaf => leaf }
+      GroupLeaves(name, groupPath, parent, leaves) :: groupsOf(groupMembers, groupPath, Some(name))
+    case _: MessageMember.Leaf => Nil
   }
 
   private def leafFragments(leaf: MessageMember.Leaf, path: String): LeafFragments = leaf match {
@@ -250,6 +386,11 @@ private[codegen] object CodecGenerator {
   private val ReadBytes = 50
   private val VariableBytes = 15
   private val WriteBytes = 80
+  // the call that copies a leaf's group before a case reads it
+  private val TouchBytes = 5
+
+  // the number of variables copied from the value being merged into by each method
+  private val CopiesPerMethod = 64
 
   /**
    * A field without presence, written unless it holds its default value.
@@ -257,7 +398,9 @@ private[codegen] object CodecGenerator {
   private def singularFragments(f: Descriptors.FieldDescriptor, path: String) = {
     val variable = variableName(f.scalaName)
     LeafFragments(
-      variable = s"var $variable: ${f.scalaTypeName} = $path",
+      variable = variable,
+      variableType = f.scalaTypeName,
+      initial = path,
       cases = List(ReadCase(tag(f), s"$variable = ${readValue(f)}", ReadBytes)),
       argument = variable,
       default = f.scalaDefaultValue,
@@ -284,7 +427,9 @@ private[codegen] object CodecGenerator {
       case _ => s"$ScalaSome(${readValue(f)})"
     }
     LeafFragments(
-      variable = s"var $variable: ${f.scalaTypeName} = $path",
+      variable = variable,
+      variableType = f.scalaTypeName,
+      initial = path,
       cases = List(ReadCase(tag(f), s"$variable = $read", ReadBytes)),
       argument = variable,
       default = ScalaNone,
@@ -344,7 +489,9 @@ private[codegen] object CodecGenerator {
       )
     }
     LeafFragments(
-      variable = s"var $variable: $builderType = null",
+      variable = variable,
+      variableType = builderType,
+      initial = "null",
       cases = ReadCase(tag(f), s"$create; $add", ReadBytes) :: packedCase.toList,
       argument = appended(variable, path),
       default = f.scalaDefaultValue,
@@ -379,7 +526,9 @@ private[codegen] object CodecGenerator {
     val mapType = s"_root_.scala.collection.immutable.Map[${key.scalaType}, ${value.scalaType}]"
     val create = createBuilder(variable, s"_root_.scala.collection.immutable.Map.newBuilder[${key.scalaType}, ${value.scalaType}]")
     LeafFragments(
-      variable = s"var $variable: _root_.scala.collection.mutable.Builder[(${key.scalaType}, ${value.scalaType}), $mapType] = null",
+      variable = variable,
+      variableType = s"_root_.scala.collection.mutable.Builder[(${key.scalaType}, ${value.scalaType}), $mapType]",
+      initial = "null",
       cases = List(
         ReadCase(
           tag(f),
@@ -427,7 +576,9 @@ private[codegen] object CodecGenerator {
       ReadCase(tag(field), s"$variable = $read", bytes)
     }
     LeafFragments(
-      variable = s"var $variable: _root_.scala.Option[${o.scalaType}] = $path",
+      variable = variable,
+      variableType = s"_root_.scala.Option[${o.scalaType}]",
+      initial = path,
       cases = cases,
       argument = variable,
       default = ScalaNone,

@@ -7,7 +7,7 @@ object MetricsTest extends ZIOSpecDefault {
 
   private val metrics = Metrics(
     part1 = Metrics.Part1(activeViewCpm = Some(1.25d)),
-    part2 = Metrics.Part2(absoluteBrandLift = Some(2.5d)),
+    part5 = Metrics.Part5(absoluteBrandLift = Some(2.5d)),
   )
   private val bytes = Metrics.messageCodec.toByteArray(metrics)
 

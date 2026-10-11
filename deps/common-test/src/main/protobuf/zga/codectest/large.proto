@@ -4,8 +4,9 @@ package zga.codectest;
 
 option java_outer_classname = "LargeJava";
 
-// too many fields for one case class: the oneof and 128 doubles take 257 of the
-// JVM's 254 parameter slots, so the fields are split into chunks
+// too many fields for one case class: the oneof, 128 doubles and a long take 259
+// parameter slots, over the 64 of a generated case class, so the fields are split
+// into chunks
 message Large {
   oneof choice {
     string name = 200;

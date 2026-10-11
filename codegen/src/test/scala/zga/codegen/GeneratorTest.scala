@@ -380,8 +380,16 @@ object GeneratorTest extends ZIOSpecDefault {
       test("a large message reads and writes its chunks' fields") {
         val fields = (1 to 255).map(index => stringField(name = s"field$index", number = index)).toList
         val codec = generateCodecFiles(fields)("test/MessageMessageCodec.scala")
-        assertTrue(codec.contains("output.writeStringNoTag(value.part2.field255)")) &&
-        assertTrue(trimmed(codec).contains("\npart2 = _root_.test.Message.Part2(\n")) &&
+        // each method reads the groups of its fields once
+        assertTrue(trimmed(codec).contains("\nval value_part4 = value.part4\n")) &&
+        assertTrue(codec.contains("output.writeStringNoTag(value_part4.field255)")) &&
+        assertTrue(trimmed(codec).contains("\npart4 = new _root_.test.Message.Part4(\n")) &&
+        // constructed with a method for each group, reusing a group none of whose fields were read
+        assertTrue(trimmed(codec).contains("\npart4 = if (_touched_Part4) _construct_Part4 else value.part4,\n")) &&
+        // a group is copied from the value being merged into when one of its fields is first read
+        assertTrue(trimmed(codec).contains("private def _touch_Part4(): _root_.scala.Unit = if (!_touched_Part4) {\n_touched_Part4 = true\n")) &&
+        assertTrue(trimmed(codec).contains("\nval previous = value.part4\n_field193 = previous.field193\n")) &&
+        assertTrue(codec.contains("private def _construct_Part4: _root_.test.Message.Part4 = new _root_.test.Message.Part4(")) &&
         assertTrue(!codec.contains("groupCodec"), !generate(fields).contains("groupCodec"))
       },
       test("a codec of deprecated fields does not warn about them") {
@@ -599,7 +607,7 @@ object GeneratorTest extends ZIOSpecDefault {
         assertTrue(output.contains("done = tag == 0 || !(fields.read0(tag) || fields.read1(tag) || ")) &&
         assertTrue(output.contains("private final class _Fields(reader: _root_.zga.common.ProtoReader, value: _root_.test.Message) {")) &&
         assertTrue(
-          trimmed(output).contains("def read0(tag: _root_.scala.Int): _root_.scala.Boolean = tag match {\ncase 10 =>\n_field1 = input.readStringRequireUtf8()\ntrue\n"),
+          trimmed(output).contains("def read0(tag: _root_.scala.Int): _root_.scala.Boolean = tag match {\ncase 10 =>\n_touch_Part1(); _field1 = input.readStringRequireUtf8()\ntrue\n"),
         )
       },
       test("a message with fewer fields keeps each of the codec's methods whole") {
@@ -651,35 +659,35 @@ object GeneratorTest extends ZIOSpecDefault {
         assertTrue(generate(fields, pkg = "", javaPackage = None).contains("= _root_.MessageMessageCodec.messageCodec\n"))
       },
       test("chunks oneof parameters as well as ordinary fields") {
-        val fields = (0 until 255).map(index => oneofField(s"value$index", index + 1, index)).toList
-        val output = generateOneof(fields, (0 until 255).map(index => s"choice$index").toList)
-        val outer = output.substring(output.indexOf("case class Message("), output.indexOf("object Message {"))
+        val fields = (0 until 65).map(index => oneofField(s"value$index", index + 1, index)).toList
+        val output = generateOneof(fields, (0 until 65).map(index => s"choice$index").toList)
+        val outer = output.substring(output.indexOf("case class Message("), output.indexOf("object Message "))
         val part1 = output.substring(output.indexOf("case class Part1("), output.indexOf("case class Part2("))
         val part2 = output.substring(output.indexOf("case class Part2("), output.indexOf("given messageCodec"))
         assertTrue(outer.contains("part1:"), outer.contains("part2:"), !outer.contains("choice0:")) &&
-        assertTrue(part1.contains("choice253:"), !part1.contains("choice254:"), part2.contains("choice254:")) &&
-        assertTrue(output.contains("sealed trait Choice254 extends _root_.zga.common.Oneof\n"))
+        assertTrue(part1.contains("choice63:"), !part1.contains("choice64:"), part2.contains("choice64:")) &&
+        assertTrue(output.contains("sealed trait Choice64 extends _root_.zga.common.Oneof\n"))
       },
       test("preserves mixed member order and slot widths at a group boundary") {
-        val doubles = (1 to 126).map(index => field(name = s"field$index", number = index, fieldType = FieldDescriptorProto.Type.TYPE_DOUBLE)).toList
-        val fields = doubles ++ List(oneofField("selected", 127, 0), stringField(name = "last", number = 128)) ++
-          List(field(name = "overflow", number = 129, fieldType = FieldDescriptorProto.Type.TYPE_DOUBLE))
+        val doubles = (1 to 31).map(index => field(name = s"field$index", number = index, fieldType = FieldDescriptorProto.Type.TYPE_DOUBLE)).toList
+        val fields = doubles ++ List(oneofField("selected", 32, 0), stringField(name = "last", number = 33)) ++
+          List(field(name = "overflow", number = 34, fieldType = FieldDescriptorProto.Type.TYPE_DOUBLE))
         val output = generateOneof(fields, List("choice"))
         val part1 = output.substring(output.indexOf("case class Part1("), output.indexOf("case class Part2("))
         val part2 = output.substring(output.indexOf("case class Part2("), output.indexOf("given messageCodec"))
-        assertTrue(part1.indexOf("field126:") < part1.indexOf("choice:")) &&
+        assertTrue(part1.indexOf("field31:") < part1.indexOf("choice:")) &&
         assertTrue(part1.indexOf("choice:") < part1.indexOf("last:")) &&
         assertTrue(!part1.contains("overflow:"), part2.contains("overflow:"))
       },
       test("a required member removes its group's default") {
-        val fields = (1 to 255).map(index => stringField(name = s"field$index", number = index, options = Option.when(index == 1)(requiredOptions))).toList
+        val fields = (1 to 65).map(index => stringField(name = s"field$index", number = index, options = Option.when(index == 1)(requiredOptions))).toList
         val output = generate(fields)
         assertTrue(output.contains("  part1: _root_.test.Message.Part1,")) &&
         assertTrue(output.contains("  part2: _root_.test.Message.Part2 = _root_.test.Message.Part2(),"))
       },
       test("group names avoid fields, oneofs and nested types") {
-        val fields = (1 to 254).map(index => stringField(name = s"field$index", number = index)).toList ++
-          List(stringField(name = "part1Group", number = 255), oneofField("selected", 256, 0))
+        val fields = (1 to 64).map(index => stringField(name = s"field$index", number = index)).toList ++
+          List(stringField(name = "part1Group", number = 65), oneofField("selected", 66, 0))
         val message = messageWithOneofs(fields, List("part2"))
           .addNestedType(DescriptorProto.newBuilder.setName("Part1"))
         val output = generateTopLevel(message)
@@ -687,14 +695,14 @@ object GeneratorTest extends ZIOSpecDefault {
         assertTrue(output.contains("  part2Group: _root_.test.Message.Part2Group"))
       },
       test("leaves a message at the parameter limit flat") {
-        val fields = (1 to 254).map(index => stringField(name = s"field$index", number = index)).toList
+        val fields = (1 to 64).map(index => stringField(name = s"field$index", number = index)).toList
         val output = generate(fields)
         assertTrue(output.contains("""  field1: _root_.scala.Predef.String = "",""")) &&
-        assertTrue(output.contains("""  field254: _root_.scala.Predef.String = "",""")) &&
+        assertTrue(output.contains("""  field64: _root_.scala.Predef.String = "",""")) &&
         assertTrue(!output.contains("case class Part"))
       },
       test("chunks a message over the parameter limit and exports each chunk") {
-        val fields = (1 to 300).map(index => stringField(name = s"field$index", number = index)).toList
+        val fields = (1 to 100).map(index => stringField(name = s"field$index", number = index)).toList
         val output = generate(fields)
         val part1 = output.substring(output.indexOf("case class Part1("), output.indexOf("case class Part2("))
         val part2 = output.substring(output.indexOf("case class Part2("), output.indexOf("given messageCodec"))
@@ -704,22 +712,22 @@ object GeneratorTest extends ZIOSpecDefault {
         assertTrue(output.contains("  export part1.*")) &&
         assertTrue(output.contains("  export part2.*")) &&
         // the chunks hold consecutive fields, up to the limit
-        assertTrue(part1.contains("""  field254: _root_.scala.Predef.String = "",""")) &&
-        assertTrue(!part1.contains("field255")) &&
-        assertTrue(part2.contains("""  field255: _root_.scala.Predef.String = "",""")) &&
-        assertTrue(part2.contains("""  field300: _root_.scala.Predef.String = "",""")) &&
-        assertTrue(!part2.contains("field254"))
+        assertTrue(part1.contains("""  field64: _root_.scala.Predef.String = "",""")) &&
+        assertTrue(!part1.contains("field65")) &&
+        assertTrue(part2.contains("""  field65: _root_.scala.Predef.String = "",""")) &&
+        assertTrue(part2.contains("""  field100: _root_.scala.Predef.String = "",""")) &&
+        assertTrue(!part2.contains("field64:"))
       },
-      test("counts a long or double field as two of the 254 slots") {
-        val fields = (1 to 200)
+      test("counts a long or double field as two parameter slots") {
+        val fields = (1 to 40)
           .map(index => field(name = s"field$index", number = index, fieldType = FieldDescriptorProto.Type.TYPE_DOUBLE))
           .toList
         val output = generate(fields)
         val part1 = output.substring(output.indexOf("case class Part1("), output.indexOf("case class Part2("))
         val part2 = output.substring(output.indexOf("case class Part2("), output.indexOf("given messageCodec"))
-        assertTrue(part1.contains("  field127: _root_.scala.Double = 0.0d,")) &&
-        assertTrue(!part1.contains("field128")) &&
-        assertTrue(part2.contains("  field128: _root_.scala.Double = 0.0d,"))
+        assertTrue(part1.contains("  field32: _root_.scala.Double = 0.0d,")) &&
+        assertTrue(!part1.contains("field33")) &&
+        assertTrue(part2.contains("  field33: _root_.scala.Double = 0.0d,"))
       },
     ),
     suite("validation")(

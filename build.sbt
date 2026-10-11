@@ -74,7 +74,21 @@ lazy val root = project.in(file("."))
   .aggregate(codegen)
   .aggregate(shared, sharedIT, common, commonTest, iam)
   .aggregate(ads, analytics, cloudErrorReporting, cloudKms, cloudRun, cloudTrace, merchant, secretManager, storage)
+  .aggregate(benchmark)
   // note not including client IT projects so `test` does not consider them
+  .disablePlugins(MimaPlugin)
+
+lazy val benchmark = project.in(file("benchmark"))
+  .settings(moduleName := "zga-benchmark")
+  .settings(noPublishSettings)
+  .settings(Seq(
+    libraryDependencies ++= Seq(
+      // protobuf-java messages of the same Google Ads version as `ads`, to compare against
+      "com.google.api-ads" % "google-ads-stubs-v25" % "47.0.0",
+    ),
+  ))
+  .dependsOn(ads)
+  .enablePlugins(JmhPlugin)
   .disablePlugins(MimaPlugin)
 
 lazy val codegenPluginJar = taskKey[HashedVirtualFileRef]("The protoc plugin jar")

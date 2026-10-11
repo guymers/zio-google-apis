@@ -1,6 +1,7 @@
 package zga.common
 
 import com.google.protobuf.ByteString
+import com.google.protobuf.CodedInputStream
 import com.google.protobuf.CodedOutputStream
 import com.google.protobuf.WireFormat
 import com.google.protobuf as pb
@@ -261,7 +262,7 @@ object MessageCodecTest extends ZIOSpecDefault {
       test("a message split into chunks writes its fields in field number order") {
         val value = Large(
           part1 = Large.Part1(choice = Some(Large.Choice.Name("name")), d1 = 1.5d),
-          part2 = Large.Part2(d128 = 2.5d, count = 7L),
+          part5 = Large.Part5(d128 = 2.5d, count = 7L),
         )
         val java = LargeJava.Large.newBuilder.setName("name").setD1(1.5d).setD128(2.5d).setCount(7L).build()
         assertTrue(MessageCodec[Large].toByteArray(value).sameElements(java.toByteArray)) &&
@@ -482,6 +483,24 @@ object MessageCodecTest extends ZIOSpecDefault {
         val child = Node(number = Some(2), size = Some(Size.SMALL), unpacked = Chunk(3))
         assertTrue(value == Node(name = Some("first"), number = Some(1), child = Some(child))) &&
         assertTrue(MessageCodec[Node].toByteArray(value).sameElements(Proto2Java.Node.parseFrom(bytes).toByteArray))
+      },
+      test("a message split into chunks merges each read field into the previous value") {
+        val previous = Large(
+          part1 = Large.Part1(d1 = 1.5d),
+          part3 = Large.Part3(d70 = 3.5d),
+          part5 = Large.Part5(count = 5L),
+        )
+        val bytes = LargeJava.Large.newBuilder.setD2(2.5d).setD128(4.5d).build().toByteArray
+        val value = MessageCodec[Large].readFrom(ProtoReader(CodedInputStream.newInstance(bytes)), previous)
+        assertTrue(
+          value == Large(
+            part1 = Large.Part1(d1 = 1.5d, d2 = 2.5d),
+            part3 = Large.Part3(d70 = 3.5d),
+            part5 = Large.Part5(d128 = 4.5d, count = 5L),
+          ),
+        ) &&
+        // a chunk none of whose fields were read is the previous one
+        assertTrue(value.part3 eq previous.part3)
       },
       test("many occurrences of a message field merge in linear time") {
         val count = 100000
