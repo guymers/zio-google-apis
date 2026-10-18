@@ -62,9 +62,9 @@ private[codegen] object CodecGenerator {
   )
 
   /**
-   * The codec of a message, as the members of the object that holds it, and the
-   * parent and annotation of that object. The object itself is the codec,
-   * rather than an anonymous class of its own, which saves a class per message.
+   * A codec as the members of the object that holds it, and the parent and
+   * annotation of that object. The object itself is the codec, rather than an
+   * anonymous class of its own, which saves a class per message.
    */
   case class Codec(parent: Option[String], members: String, annotation: String)
 
@@ -72,7 +72,7 @@ private[codegen] object CodecGenerator {
     val scalaType = m.scalaType
     val leaves = leavesOf(parameters, "value")
     val fragments = leaves.map((leaf, path) => leaf -> leafFragments(leaf, path)).toMap
-    val default = construct(m, scalaType, parameters, fragments(_).default)
+    val default = construct(m, m.scalaPath, parameters, fragments(_).default)
     // the codec reads and writes the deprecated fields as well
     val deprecated = leaves.exists {
       case (MessageMember.Field(field), _) => field.getOptions.getDeprecated
@@ -80,10 +80,11 @@ private[codegen] object CodecGenerator {
     }
     val annotation = if (deprecated) "@_root_.scala.annotation.nowarn(\"cat=deprecation\")\n" else ""
     val declaration = s"given messageCodec: $MessageCodec[$scalaType] ="
-    if (leaves.isEmpty) Codec(parent = None, members = s"$declaration $MessageCodec.empty($default)", annotation = "")
-    else {
+    if (leaves.isEmpty) {
+      Codec(parent = None, members = s"$declaration $MessageCodec.empty($default)", annotation = "")
+    } else {
       val written = leaves.sortBy((leaf, _) => number(leaf)).map((leaf, _) => fragments(leaf))
-      val constructed = construct(m, scalaType, parameters, fragments(_).argument)
+      val constructed = construct(m, m.scalaPath, parameters, fragments(_).argument)
       val methods = List(s"override private[zga] val defaultValue: $scalaType = $default") ++
         printSize(scalaType, written) ++
         printWrite(scalaType, written) ++
@@ -191,10 +192,9 @@ private[codegen] object CodecGenerator {
           |  case _ => false
           |}""".stripMargin
       }
-      // a proto name cannot start with an underscore, so the class cannot collide with a nested type of the companion
       List(
         s"""$signature = {
-          |  val fields = new _Fields(reader, value)
+          |  val fields = new Fields(reader, value)
           |  var done = false
           |  while (!done) {
           |    val tag = reader.input.readTag()
@@ -202,7 +202,7 @@ private[codegen] object CodecGenerator {
           |  }
           |  fields.result
           |}""".stripMargin,
-        s"""private final class _Fields(reader: $ProtoReader, value: $scalaType) {
+        s"""private final class Fields(reader: $ProtoReader, value: $scalaType) {
           |  val input = reader.input
           |$variables
           |
@@ -224,16 +224,16 @@ private[codegen] object CodecGenerator {
 
   private def construct(
     m: Descriptors.Descriptor,
-    scalaType: String,
+    scalaPath: String,
     members: List[MessageMember],
     argument: MessageMember.Leaf => String,
   ): String = {
     val values = members.map {
       case MessageMember.Group(name, parameterName, groupMembers) =>
-        s"${Utils.escapeScalaKeyword(parameterName)} = ${construct(m, s"${m.scalaType}.$name", groupMembers, argument)}"
+        s"${Utils.escapeScalaKeyword(parameterName)} = ${construct(m, s"${m.scalaPath}.$name", groupMembers, argument)}"
       case leaf: MessageMember.Leaf => s"${Utils.escapeScalaKeyword(leaf.scalaName)} = ${argument(leaf)}"
     }
-    if (values.isEmpty) s"$scalaType()" else values.mkString(s"$scalaType(\n  ", ",\n  ", ",\n)").replace("\n", "\n    ")
+    if (values.isEmpty) scalaPath else values.mkString(s"$scalaPath(\n  ", ",\n  ", ",\n)").replace("\n", "\n    ")
   }
 
   private def leafFragments(leaf: MessageMember.Leaf, path: String): LeafFragments = leaf match {
@@ -470,7 +470,7 @@ private[codegen] object CodecGenerator {
 
   private def writeTag(f: Descriptors.FieldDescriptor) = s"output.writeTag(${f.getNumber}, ${wireType(f)})"
 
-  private def messageCodec(f: Descriptors.FieldDescriptor) = s"${f.getMessageType.scalaType}.messageCodec"
+  private def messageCodec(f: Descriptors.FieldDescriptor) = s"${f.getMessageType.scalaPath}.messageCodec"
 
   private def scalarName(f: Descriptors.FieldDescriptor) = f.getType match {
     case Type.DOUBLE => "Double"

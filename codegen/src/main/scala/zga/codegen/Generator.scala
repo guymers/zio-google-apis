@@ -121,42 +121,17 @@ object Generator {
   }
 
   /**
-   * How an enum maps between its values and their numbers.
-   *
-   * @param valueMethod
-   *   the `value` method of the Scala enum
-   * @param members
-   *   the members of the companion that look up a number
-   * @param count
-   *   the number of values, when a number is looked up as an ordinal
-   */
-  private case class EnumNumbers(valueMethod: String, members: String, count: Option[Int])
-
-  /**
    * Each value is a plain case, as a case with constructor arguments compiles
-   * to a class of its own. When the numbers count up from zero a value's number
-   * is its ordinal, and a number is looked up as an ordinal. Otherwise a value
-   * looks up its number by ordinal in the `numbers` array, and a number is
-   * looked up in a map, in which the first of values sharing a number wins, as
-   * in protobuf-java.
+   * to a class of its own, and looks up its number by ordinal: the ordinal
+   * itself when the numbers count up from zero, otherwise the `numbers` array.
    */
-  private def printEnumNumbers(e: Descriptors.EnumDescriptor, scalaEnum: String, numbersRef: String) = {
+  private def printEnumNumbers(e: Descriptors.EnumDescriptor, numbersRef: String) = {
     val numbers = e.getValues.asScala.map(_.getNumber)
-    if (numbers.zipWithIndex.forall(_ == _)) {
-      EnumNumbers(
-        valueMethod = "def value: _root_.scala.Int = ordinal",
-        members = "",
-        count = Some(numbers.length),
-      )
-    } else {
-      EnumNumbers(
-        valueMethod = s"def value: _root_.scala.Int = $numbersRef(ordinal)",
-        members = s"""
-          |  private val numbers = _root_.scala.Array[_root_.scala.Int](${numbers.mkString(", ")})
-          |  private val valueMap = _root_.zga.common.ProtoEnum.valueMap($scalaEnum.values)""".stripMargin,
-        count = None,
-      )
-    }
+    if (numbers.zipWithIndex.forall(_ == _)) ("def value: _root_.scala.Int = ordinal", "")
+    else (
+      s"def value: _root_.scala.Int = $numbersRef(ordinal)",
+      s"\n  private val numbers = _root_.scala.Array[_root_.scala.Int](${numbers.mkString(", ")})",
+    )
   }
 
   private def enumComment(e: Descriptors.EnumDescriptor) = {
@@ -169,7 +144,7 @@ object Generator {
   /**
    * An open enum (proto3) keeps a number it does not know. The known values are
    * a Scala enum, exported so they can be referred to as `E.A`, and an unknown
-   * number is an `Unrecognized` value.
+   * number is an `Unrecognized` case class.
    */
   private def printOpenEnum(e: Descriptors.EnumDescriptor) = {
     if (e.getName == "Unrecognized") {
@@ -178,29 +153,26 @@ object Generator {
     val enumName = Utils.escapeScalaKeyword(e.getName)
     val enumType = e.scalaType
     val values = printEnumValues(e, ReservedEnumMemberNames ++ Set("Recognized", "Unrecognized"))
-    val numbers = printEnumNumbers(e, "Recognized", "numbers")
-    val lookup = numbers.count match {
-      case Some(count) => s"if (v >= 0 && v < $count) Recognized.fromOrdinal(v) else new Unrecognized(v)"
-      case None => "valueMap.get(v) match { case _root_.scala.Some(value) => value; case _root_.scala.None => new Unrecognized(v) }"
-    }
+    val (valueMethod, numbers) = printEnumNumbers(e, "numbers")
 
-    // `CanEqual.derived` rather than `derives`, which keeps a lazy val in every companion
     s"""
       |${enumComment(e)}
-      |sealed trait $enumName extends _root_.zga.common.ProtoEnum
+      |sealed trait $enumName derives _root_.scala.CanEqual {
+      |  def value: _root_.scala.Int
+      |}
       |object $enumName {
       |  enum Recognized extends $enumType {
       |    ${values.mkString("\n    ")}
       |
-      |    ${numbers.valueMethod}
+      |    $valueMethod
       |  }
       |  export Recognized.*
       |
-      |  final class Unrecognized private[$enumName] (value: _root_.scala.Int) extends _root_.zga.common.UnrecognizedValue(value) with $enumType
-      |
-      |  inline given _root_.scala.CanEqual[$enumType, $enumType] = _root_.scala.CanEqual.derived
-      |${numbers.members}
-      |  def fromValue(v: _root_.scala.Int): $enumType = $lookup
+      |  case class Unrecognized private[$enumName] (value: _root_.scala.Int) extends $enumType
+      |$numbers
+      |  // the first of values sharing a number wins, as in protobuf-java
+      |  private val valueMap = Recognized.values.reverseIterator.map(v => v.value -> v).toMap
+      |  def fromValue(v: _root_.scala.Int): $enumType = valueMap.getOrElse(v, Unrecognized(v))
       |}
       |""".stripMargin
   }
@@ -213,23 +185,19 @@ object Generator {
   private def printClosedEnum(e: Descriptors.EnumDescriptor) = {
     val enumName = Utils.escapeScalaKeyword(e.getName)
     val values = printEnumValues(e, ReservedEnumMemberNames)
-    val numbers = printEnumNumbers(e, enumName, s"$enumName.numbers")
-    val lookup = numbers.count match {
-      case Some(count) => s"if (v >= 0 && v < $count) _root_.scala.Some($enumName.fromOrdinal(v)) else _root_.scala.None"
-      case None => "valueMap.get(v)"
-    }
+    val (valueMethod, numbers) = printEnumNumbers(e, s"$enumName.numbers")
 
     s"""
       |${enumComment(e)}
-      |enum $enumName extends _root_.zga.common.ProtoEnum {
+      |enum $enumName derives _root_.scala.CanEqual {
       |  ${values.mkString("\n  ")}
       |
-      |  ${numbers.valueMethod}
+      |  $valueMethod
       |}
-      |object $enumName {
-      |  inline given _root_.scala.CanEqual[$enumName, $enumName] = _root_.scala.CanEqual.derived
-      |${numbers.members}
-      |  def fromValue(v: _root_.scala.Int): _root_.scala.Option[$enumName] = $lookup
+      |object $enumName {$numbers
+      |  // the first of values sharing a number wins, as in protobuf-java
+      |  private val valueMap = $enumName.values.reverseIterator.map(v => v.value -> v).toMap
+      |  def fromValue(v: _root_.scala.Int): _root_.scala.Option[$enumName] = valueMap.get(v)
       |}
       |""".stripMargin
   }
@@ -296,7 +264,7 @@ object Generator {
     val (scalaType, defaultValue, deprecated) = member match {
       case MessageMember.Field(field) => (field.scalaTypeName, field.scalaDefaultValue, field.getOptions.getDeprecated)
       case MessageMember.Oneof(oneof) => (s"_root_.scala.Option[${oneof.scalaType}]", "_root_.scala.None", false)
-      case MessageMember.Group(name, _, _) => (s"${m.scalaType}.$name", s"${m.scalaType}.$name()", false)
+      case MessageMember.Group(name, _, _) => (s"${m.scalaPath}.$name", s"${m.scalaPath}.$name()", false)
     }
     val default = if (member.hasDefault) s" = $defaultValue" else ""
     List(
@@ -308,14 +276,15 @@ object Generator {
   private def printMessage(m: Descriptors.Descriptor): String = {
     validateFieldNames(m)
     val parameters = messageLayout(m)
-    val codec = if (CodecGenerator.isSplit(parameters)) {
-      val codec = s"${Utils.rootQualified(m.getFile.scalaPackage)}.${codecObjectName(m)}.messageCodec"
-      CodecGenerator.Codec(
-        parent = None,
-        members = s"given messageCodec: _root_.zga.common.MessageCodec[${m.scalaType}] = $codec",
-        annotation = "",
-      )
-    } else CodecGenerator.printMessageCodec(m, parameters)
+    val codec =
+      if (CodecGenerator.isSplit(parameters)) {
+        val codec = s"${Utils.rootQualified(m.getFile.scalaPackage)}.${codecObjectName(m)}.messageCodec"
+        CodecGenerator.Codec(
+          parent = None,
+          members = s"given messageCodec: _root_.zga.common.MessageCodec[${m.scalaType}] = $codec",
+          annotation = "",
+        )
+      } else CodecGenerator.printMessageCodec(m, parameters)
     val companionMembers =
       realOneofs(m).map(printOneof(_)) ++
         m.getEnumTypes.asScala.map(printEnum(_)) ++
@@ -366,22 +335,17 @@ object Generator {
       s"  export ${Utils.escapeScalaKeyword(parameterName)}.*"
     }
     val body = if (exports.isEmpty) "" else exports.mkString(" {\n", "\n", "\n}")
-    // a message without fields does not need the members of a case class, which take up space in the jar
-    val (product, constructor) = if (parameters.isEmpty) {
-      (s"final class $name private () extends _root_.zga.common.EmptyMessage", List(s"def apply(): ${m.scalaType} = new $name()"))
-    } else {
-      (
+    val product =
+      if (parameters.isEmpty) ""
+      else
         s"""case class $name(
           |  ${parameters.flatMap(printParameter(m, _)).mkString("\n  ")}
-          |)$body""".stripMargin,
-        Nil,
-      )
-    }
+          |)$body""".stripMargin
+    val objectDeclaration = s"${companionAnnotation}object $name${extendsClause(companionParent)} {"
     s"""
       |$memberDoc
-      |$product
-      |${companionAnnotation}object $name${extendsClause(companionParent)} {
-      |${(constructor ++ companionMembers).mkString("\n")}
+      |${if (product.isEmpty) objectDeclaration else s"$product\n$objectDeclaration"}
+      |${companionMembers.mkString("\n")}
       |}
       |""".stripMargin
   }

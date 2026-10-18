@@ -3,10 +3,11 @@ package zga.codegen
 case class ZioGrpcOptions(
   classPrefix: String,
   pkgName: String,
+  servicesOnly: Set[String] = Set.empty,
 )
 object ZioGrpcOptions {
 
-  private val SupportedOptions = Set("class_prefix", "pkg_name")
+  private val SupportedOptions = Set("class_prefix", "pkg_name", "services_only")
 
   def fromStr(str: String): Either[String, Option[ZioGrpcOptions]] = {
     if (str.nonEmpty) {
@@ -27,7 +28,14 @@ object ZioGrpcOptions {
             .get("pkg_name")
             .filter(_.nonEmpty)
             .toRight(s"invalid grpc options string: $str, missing pkg_name")
-        } yield Some(apply(classPrefix = classPrefix, pkgName = pkgName))
+          servicesOnly <- options.get("services_only") match {
+            case None => Right(Set.empty[String])
+            case Some(value) =>
+              val files = value.split(',').iterator.map(_.trim).filter(_.nonEmpty).toSet
+              if (files.isEmpty) Left(s"invalid grpc options string: $str, missing services_only")
+              else Right(files)
+          }
+        } yield Some(apply(classPrefix = classPrefix, pkgName = pkgName, servicesOnly = servicesOnly))
       }
     } else {
       Right(None)

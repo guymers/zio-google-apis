@@ -12,6 +12,12 @@ object ZioGrpcOptionsTest extends ZIOSpecDefault {
           Right(Some(ZioGrpcOptions(classPrefix = "Test", pkgName = "test"))),
       )
     },
+    test("parses services_only") {
+      assertTrue(
+        ZioGrpcOptions.fromStr("class_prefix=Test;pkg_name=test;services_only=a.proto,b.proto") ==
+          Right(Some(ZioGrpcOptions(classPrefix = "Test", pkgName = "test", servicesOnly = Set("a.proto", "b.proto")))),
+      )
+    },
     test("no options") {
       assertTrue(ZioGrpcOptions.fromStr("") == Right(None))
     },
@@ -25,6 +31,12 @@ object ZioGrpcOptionsTest extends ZIOSpecDefault {
       assertTrue(
         ZioGrpcOptions.fromStr("class_prefix=Test;pkg_name=test;extra=1") ==
           Left("invalid grpc options string: class_prefix=Test;pkg_name=test;extra=1, unknown options: extra"),
+      )
+    },
+    test("missing services_only value") {
+      assertTrue(
+        ZioGrpcOptions.fromStr("class_prefix=Test;pkg_name=test;services_only=") ==
+          Left("invalid grpc options string: class_prefix=Test;pkg_name=test;services_only=, missing services_only"),
       )
     },
     test("empty option value") {

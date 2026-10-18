@@ -44,6 +44,9 @@ Compile / doc / scalacOptions ++= Seq(
   s"-external-mappings:.*grpc-api.*::javadoc::https://javadoc.io/static/io.grpc/grpc-api/$grpcVersion/",
 )
 
+// Maven Central requires a javadoc jar but not its contents, the scaladoc of the generated code is hundreds of MB
+Compile / packageDoc / mappings := Seq.empty
+
 Compile / console / scalacOptions ~= filterScalacConsoleOpts
 Test / console / scalacOptions ~= filterScalacConsoleOpts
 
@@ -59,9 +62,6 @@ libraryDependencies ++= Seq(
 )
 
 mimaPreviousArtifacts := previousStableVersion.value.map(organization.value %% moduleName.value % _).toSet
-
-// Maven Central requires a javadoc jar but not its contents, the scaladoc of the generated code is hundreds of MB
-Compile / packageDoc / mappings := Seq.empty
 
 lazy val noPublishSettings = Seq(
   publish / skip := true,
@@ -123,7 +123,7 @@ def itProject(name: String, directory: Option[String]) = {
     ))
 }
 
-def client(name: String, classPrefix: String, pkgName: String) = {
+def client(name: String, classPrefix: String, pkgName: String, extraOptions: Map[String, String] = Map.empty) = {
   Project(name, file(s"clients/$name"))
     .settings(moduleName := s"zga-$name")
     .settings(Seq(
@@ -164,7 +164,7 @@ def client(name: String, classPrefix: String, pkgName: String) = {
         (ProtobufConfig / protobufExternalIncludePath).value
       },
     ))
-    .settings(protoPlugin(Map("class_prefix" -> classPrefix, "pkg_name" -> pkgName)))
+    .settings(protoPlugin(Map("class_prefix" -> classPrefix, "pkg_name" -> pkgName) ++ extraOptions))
     .enablePlugins(ProtobufPlugin)
     .dependsOn(
       shared,
@@ -174,15 +174,18 @@ def client(name: String, classPrefix: String, pkgName: String) = {
 def clientIT(name: String) = itProject(name, directory = Some("clients"))
   .dependsOn(sharedIT % "test->test")
 
-lazy val ads = client("ads", classPrefix = "Ads", pkgName = "ads")
+// the longrunning messages are shared with the other clients through zga-common
+val longrunningServicesOnly = Map("services_only" -> "google/longrunning/operations.proto")
 
-lazy val analytics = client("analytics", classPrefix = "Analytics", pkgName = "analytics")
+lazy val ads = client("ads", classPrefix = "Ads", pkgName = "ads", extraOptions = longrunningServicesOnly)
+
+lazy val analytics = client("analytics", classPrefix = "Analytics", pkgName = "analytics", extraOptions = longrunningServicesOnly)
 
 lazy val cloudErrorReporting = client("cloud-error-reporting", classPrefix = "CloudErrorReporting", pkgName = "clouderrorreporting")
 
-lazy val cloudKms = client("cloud-kms", classPrefix = "CloudKms", pkgName = "cloudkms")
+lazy val cloudKms = client("cloud-kms", classPrefix = "CloudKms", pkgName = "cloudkms", extraOptions = longrunningServicesOnly)
 
-lazy val cloudRun = client("cloud-run", classPrefix = "CloudRun", pkgName = "cloudrun")
+lazy val cloudRun = client("cloud-run", classPrefix = "CloudRun", pkgName = "cloudrun", extraOptions = longrunningServicesOnly)
   .dependsOn(iam % "compile->compile;protobuf->protobuf")
 lazy val cloudRunIT = clientIT("cloud-run")
   .dependsOn(cloudRun)

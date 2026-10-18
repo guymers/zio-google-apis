@@ -97,7 +97,7 @@ object MessageCodec {
   /**
    * The codec of a message without fields, which skips the fields it reads.
    */
-  private[zga] def empty[T](default: T): MessageCodec[T] = new EmptyMessageCodec(default)
+  private[zga] def empty[T](default: T)(using T <:< Singleton): MessageCodec[T] = new EmptyMessageCodec(default)
 
   private final class EmptyMessageCodec[T](default: T) extends MessageCodec[T] {
     override private[zga] def defaultValue = default
