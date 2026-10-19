@@ -74,10 +74,14 @@ object Plugin {
     }
 
     val filesToGenerate = request.getFileToGenerateList.asScala.toList.map(fileName => fileName -> fileDescriptors(fileName))
+    val servicesOnly = zioGrpcOptions.fold(Set.empty[String])(_.servicesOnly)
+    validateServicesOnly(servicesOnly, filesToGenerate)
 
     filesToGenerate.foreach { (fileName, f) =>
-      addFile(fileName, Generator.fileName(f), Generator.printFile(f))
-      Generator.codecFiles(f).foreach((codecFileName, content) => addFile(fileName, codecFileName, content))
+      if (!servicesOnly.contains(fileName)) {
+        addFile(fileName, Generator.fileName(f), Generator.printFile(f))
+        Generator.codecFiles(f).foreach((codecFileName, content) => addFile(fileName, codecFileName, content))
+      }
 
       if (ZioGrpcGenerator.hasServices(f)) {
         zioGrpcOptions.foreach { options =>
@@ -87,6 +91,23 @@ object Plugin {
     }
 
     responseBuilder.build()
+  }
+
+  /**
+   * A proto whose messages are provided by a dependency can have its messages
+   * left out, generating only the service code that refers to them.
+   */
+  private def validateServicesOnly(servicesOnly: Set[String], filesToGenerate: List[(String, Descriptors.FileDescriptor)]): Unit = {
+    val byName = filesToGenerate.toMap
+    servicesOnly.foreach { name =>
+      byName.get(name) match {
+        case None =>
+          throw IllegalArgumentException(s"services_only names '$name', which is not a file to generate")
+        case Some(f) if f.getServices.isEmpty =>
+          throw IllegalArgumentException(s"services_only names '$name', which has no services")
+        case Some(_) => ()
+      }
+    }
   }
 
   private def protoFilesToFiles(request: PluginProtos.CodeGeneratorRequest) = {

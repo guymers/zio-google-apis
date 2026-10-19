@@ -5,6 +5,7 @@ import com.google.protobuf.compiler.PluginProtos
 import zio.test.ZIOSpecDefault
 import zio.test.assertTrue
 
+import scala.jdk.CollectionConverters.*
 import scala.util.Try
 
 object ZioGrpcGeneratorTest extends ZIOSpecDefault {
@@ -13,7 +14,7 @@ object ZioGrpcGeneratorTest extends ZIOSpecDefault {
   import TestDescriptors.routingRule
   import TestDescriptors.serviceDescriptor
 
-  private val options = ZioGrpcOptions(classPrefix = "Test", pkgName = "test")
+  private val options = ZioGrpcOptions(classPrefix = "Test", pkgName = "test", servicesOnly = Set.empty)
 
   override val spec = suite("ZioGrpcGenerator")(
     suite("file names")(
@@ -191,6 +192,54 @@ object ZioGrpcGeneratorTest extends ZIOSpecDefault {
       test("omits the routing constant when there are no parameters") {
         val output = ZioGrpcGenerator.printServiceFile(options, serviceDescriptor(method("GetThing")))
         assertTrue(!output.contains("ROUTING_GET_THING"))
+      },
+    ),
+    suite("services_only")(
+      test("generates only the service file") {
+        val request = PluginProtos.CodeGeneratorRequest.newBuilder
+          .addFileToGenerate("test/service.proto")
+          .addProtoFile(fileDescriptor(List(method("GetThing")), withService = true).toProto)
+          .setParameter("class_prefix=Test;pkg_name=test;services_only=test/service.proto")
+          .build()
+
+        val names = Plugin.generateRequest(request).getFileList.asScala.map(_.getName).toSet
+
+        assertTrue(!names.contains("test/service.proto.scala")) &&
+        assertTrue(names.contains("zga/client/test/service.proto.scala"))
+      },
+      test("generates messages for a file that is not services only") {
+        val request = PluginProtos.CodeGeneratorRequest.newBuilder
+          .addFileToGenerate("test/service.proto")
+          .addProtoFile(fileDescriptor(List(method("GetThing")), withService = true).toProto)
+          .setParameter("class_prefix=Test;pkg_name=test")
+          .build()
+
+        val names = Plugin.generateRequest(request).getFileList.asScala.map(_.getName).toSet
+
+        assertTrue(names.contains("test/service.proto.scala")) &&
+        assertTrue(names.contains("zga/client/test/service.proto.scala"))
+      },
+      test("rejects a services_only file that is not generated") {
+        val request = PluginProtos.CodeGeneratorRequest.newBuilder
+          .addFileToGenerate("test/service.proto")
+          .addProtoFile(fileDescriptor(List(method("GetThing")), withService = true).toProto)
+          .setParameter("class_prefix=Test;pkg_name=test;services_only=other.proto")
+          .build()
+
+        val error = Try(Plugin.generateRequest(request)).failed.toOption
+
+        assertTrue(error.exists(_.getMessage == "services_only names 'other.proto', which is not a file to generate"))
+      },
+      test("rejects a services_only file without services") {
+        val request = PluginProtos.CodeGeneratorRequest.newBuilder
+          .addFileToGenerate("test/service.proto")
+          .addProtoFile(fileDescriptor(Nil, withService = false).toProto)
+          .setParameter("class_prefix=Test;pkg_name=test;services_only=test/service.proto")
+          .build()
+
+        val error = Try(Plugin.generateRequest(request)).failed.toOption
+
+        assertTrue(error.exists(_.getMessage == "services_only names 'test/service.proto', which has no services"))
       },
     ),
   )

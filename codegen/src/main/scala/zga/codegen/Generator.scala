@@ -69,10 +69,11 @@ object Generator {
       val parameters = messageLayout(m)
       Option.when(CodecGenerator.isSplit(parameters)) {
         val name = codecObjectName(m)
+        val codec = CodecGenerator.printMessageCodec(m, parameters)
         val content =
           s"""${fileHeader(f)}
-            |${visibility}object $name {
-            |${CodecGenerator.printMessageCodec(m, parameters)}
+            |${codec.annotation}${visibility}object $name${extendsClause(codec.parent)} {
+            |${codec.members}
             |}
             |""".stripMargin
         (f.scalaPackageParts :+ s"$name.scala").mkString("/") -> content
@@ -263,7 +264,7 @@ object Generator {
     val (scalaType, defaultValue, deprecated) = member match {
       case MessageMember.Field(field) => (field.scalaTypeName, field.scalaDefaultValue, field.getOptions.getDeprecated)
       case MessageMember.Oneof(oneof) => (s"_root_.scala.Option[${oneof.scalaType}]", "_root_.scala.None", false)
-      case MessageMember.Group(name, _, _) => (s"${m.scalaType}.$name", s"${m.scalaType}.$name()", false)
+      case MessageMember.Group(name, _, _) => (s"${m.scalaPath}.$name", s"${m.scalaPath}.$name()", false)
     }
     val default = if (member.hasDefault) s" = $defaultValue" else ""
     List(
@@ -275,6 +276,15 @@ object Generator {
   private def printMessage(m: Descriptors.Descriptor): String = {
     validateFieldNames(m)
     val parameters = messageLayout(m)
+    val codec =
+      if (CodecGenerator.isSplit(parameters)) {
+        val codec = s"${Utils.rootQualified(m.getFile.scalaPackage)}.${codecObjectName(m)}.messageCodec"
+        CodecGenerator.Codec(
+          parent = None,
+          members = s"given messageCodec: _root_.zga.common.MessageCodec[${m.scalaType}] = $codec",
+          annotation = "",
+        )
+      } else CodecGenerator.printMessageCodec(m, parameters)
     val companionMembers =
       realOneofs(m).map(printOneof(_)) ++
         m.getEnumTypes.asScala.map(printEnum(_)) ++
@@ -286,24 +296,25 @@ object Generator {
             parameters = group.members,
             comment = None,
             deprecated = false,
+            companionParent = None,
+            companionAnnotation = "",
             companionMembers = Nil,
           )
         } ++
-        List(
-          if (CodecGenerator.isSplit(parameters)) {
-            val codec = s"${Utils.rootQualified(m.getFile.scalaPackage)}.${codecObjectName(m)}.messageCodec"
-            s"given messageCodec: _root_.zga.common.MessageCodec[${m.scalaType}] = $codec"
-          } else CodecGenerator.printMessageCodec(m, parameters),
-        )
+        List(codec.members)
     printProduct(
       m = m,
       name = Utils.escapeScalaKeyword(m.getName),
       parameters = parameters,
       comment = Some(m.comment.getOrElse(m.getName)),
       deprecated = m.getOptions.getDeprecated,
+      companionParent = codec.parent,
+      companionAnnotation = codec.annotation,
       companionMembers = companionMembers,
     )
   }
+
+  private def extendsClause(parent: Option[String]) = parent.fold("")(p => s" extends $p")
 
   private def printProduct(
     m: Descriptors.Descriptor,
@@ -311,6 +322,8 @@ object Generator {
     parameters: List[MessageMember],
     comment: Option[String],
     deprecated: Boolean,
+    companionParent: Option[String],
+    companionAnnotation: String,
     companionMembers: Seq[String],
   ): String = {
     val params = parameters.flatMap(member => member.comment.map(Utils.escapeScalaKeyword(member.scalaName) -> _)).to(ListMap)
@@ -322,12 +335,18 @@ object Generator {
       s"  export ${Utils.escapeScalaKeyword(parameterName)}.*"
     }
     val body = if (exports.isEmpty) "" else exports.mkString(" {\n", "\n", "\n}")
+    val product =
+      if (parameters.isEmpty) {
+        ""
+      } else {
+        s"""case class $name(
+          |  ${parameters.flatMap(printParameter(m, _)).mkString("\n  ")}
+          |)$body""".stripMargin
+      }
+    val objectDeclaration = s"${companionAnnotation}object $name${extendsClause(companionParent)} {"
     s"""
       |$memberDoc
-      |case class $name(
-      |  ${parameters.flatMap(printParameter(m, _)).mkString("\n  ")}
-      |)$body
-      |object $name {
+      |${if (product.isEmpty) objectDeclaration else s"$product\n$objectDeclaration"}
       |${companionMembers.mkString("\n")}
       |}
       |""".stripMargin

@@ -39,6 +39,39 @@ object GeneratorTest extends ZIOSpecDefault {
         assertTrue(output.contains("  name: _root_.zio.Chunk[_root_.scala.Predef.String] = _root_.zio.Chunk.empty,"))
       },
     ),
+    suite("messages")(
+      test("a message without fields is an object") {
+        val output = generate(Nil)
+        assertTrue(output.contains("object Message {")) &&
+        assertTrue(output.contains("*/\nobject Message {")) &&
+        assertTrue(!output.contains("class Message")) &&
+        assertTrue(
+          output.contains(
+            "given messageCodec: _root_.zga.common.MessageCodec[_root_.test.Message.type] = _root_.zga.common.MessageCodec.empty(_root_.test.Message)",
+          ),
+        )
+      },
+      test("a field of a message without fields uses its singleton type") {
+        val proto = FileDescriptorProto.newBuilder
+          .setName("test.proto")
+          .setPackage("test")
+          .setSyntax("proto3")
+          .setOptions(FileOptions.newBuilder.setJavaPackage("test"))
+          .addMessageType(DescriptorProto.newBuilder.setName("Empty"))
+          .addMessageType(
+            DescriptorProto.newBuilder
+              .setName("Message")
+              .addField(field("nested", 1, FieldDescriptorProto.Type.TYPE_MESSAGE, typeName = Some(".test.Empty"))),
+          )
+          .build()
+        val output = Generator.printFile(Descriptors.FileDescriptor.buildFrom(proto, Array.empty))
+        assertTrue(output.contains("nested: _root_.scala.Option[_root_.test.Empty.type]")) &&
+        assertTrue(output.contains("_root_.test.Empty.messageCodec"))
+      },
+      test("a message with fields is a case class") {
+        assertTrue(generate(List(stringField())).contains("case class Message("))
+      },
+    ),
     suite("package mapping")(
       test("generates messages in the remapped package") {
         val output = generate(List(stringField()), javaPackage = Some("com.google.rpc"))
@@ -388,7 +421,7 @@ object GeneratorTest extends ZIOSpecDefault {
         val deprecated = FieldOptions.newBuilder.setDeprecated(true).build()
         assertTrue(generate(List(stringField(options =
           Some(deprecated),
-        ))).contains("@_root_.scala.annotation.nowarn(\"cat=deprecation\")\ngiven messageCodec")) &&
+        ))).contains("@_root_.scala.annotation.nowarn(\"cat=deprecation\")\nobject Message extends _root_.zga.common.MessageCodec[_root_.test.Message] {")) &&
         assertTrue(!generate(List(stringField())).contains("nowarn"))
       },
     ),
@@ -577,7 +610,8 @@ object GeneratorTest extends ZIOSpecDefault {
         val output = generate(fields)
         assertTrue(!output.contains("serializedSize0"), !output.contains("writeTo0"), !output.contains("class Fields")) &&
         assertTrue(
-          output.contains("given messageCodec: _root_.zga.common.MessageCodec[_root_.test.Message] = new _root_.zga.common.MessageCodec[_root_.test.Message] {"),
+          output.contains("object Message extends _root_.zga.common.MessageCodec[_root_.test.Message] {") &&
+          trimmed(output).contains("inline given messageCodec: _root_.zga.common.MessageCodec[_root_.test.Message] = this"),
         ) &&
         assertTrue(generateCodecFiles(fields).isEmpty)
       },
@@ -591,9 +625,13 @@ object GeneratorTest extends ZIOSpecDefault {
           trimmed(output).contains("\ngiven messageCodec: _root_.zga.common.MessageCodec[_root_.test.Message] = _root_.test.MessageMessageCodec.messageCodec\n"),
         ) &&
         assertTrue(!output.contains("serializedSize0"), !output.contains("new _root_.zga.common.MessageCodec")) &&
-        assertTrue(codec.startsWith("\npackage test\n\nprivate[test] object MessageMessageCodec {\n")) &&
         assertTrue(
-          trimmed(codec).contains("\ngiven messageCodec: _root_.zga.common.MessageCodec[_root_.test.Message] = new _root_.zga.common.MessageCodec[_root_.test.Message] {"),
+          codec.startsWith(
+            "\npackage test\n\nprivate[test] object MessageMessageCodec extends _root_.zga.common.MessageCodec[_root_.test.Message] {\n",
+          ),
+        ) &&
+        assertTrue(
+          trimmed(codec).contains("inline given messageCodec: _root_.zga.common.MessageCodec[_root_.test.Message] = this"),
         ) &&
         assertTrue(codec.contains("private def serializedSize0("))
       },
@@ -614,7 +652,7 @@ object GeneratorTest extends ZIOSpecDefault {
       test("a split codec in the default package is public") {
         val fields = (1 to 300).map(index => stringField(name = s"field$index", number = index)).toList
         val codec = generateCodecFiles(fields, pkg = "", javaPackage = None)("MessageMessageCodec.scala")
-        assertTrue(codec.startsWith("\n\nobject MessageMessageCodec {\n")) &&
+        assertTrue(codec.startsWith("\n\nobject MessageMessageCodec extends _root_.zga.common.MessageCodec[_root_.Message] {\n")) &&
         assertTrue(generate(fields, pkg = "", javaPackage = None).contains("= _root_.MessageMessageCodec.messageCodec\n"))
       },
       test("chunks oneof parameters as well as ordinary fields") {

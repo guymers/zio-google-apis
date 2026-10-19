@@ -51,10 +51,25 @@ extension (d: Descriptors.Descriptor) {
 
   def parent: Option[Descriptors.Descriptor] = Option(d.getContainingType)
 
-  def scalaType: String = {
+  /**
+   * True when the message has no fields, and therefore should not generate a
+   * class.
+   */
+  def isEmpty: Boolean = d.getFields.isEmpty
+
+  /**
+   * The path of the message's generated class, or of its generated object.
+   */
+  def scalaPath: String = {
     val name = Utils.escapeScalaKeyword(d.getName)
-    parent.fold(Utils.rootQualified(d.getFile.scalaPackage))(_.scalaType) + s".$name"
+    parent.fold(Utils.rootQualified(d.getFile.scalaPackage))(_.scalaPath) + s".$name"
   }
+
+  /**
+   * The Scala type of the message. A message without fields has no class so its
+   * type is the singleton type of that object.
+   */
+  def scalaType: String = if (d.isEmpty) s"$scalaPath.type" else scalaPath
 
   def sourcePath: Seq[Int] = {
     if (d.isTopLevel) {
@@ -148,7 +163,7 @@ extension (f: Descriptors.FieldDescriptor) {
     case Descriptors.FieldDescriptor.JavaType.BOOLEAN => "false"
     case Descriptors.FieldDescriptor.JavaType.BYTE_STRING => "_root_.com.google.protobuf.ByteString.EMPTY"
     case Descriptors.FieldDescriptor.JavaType.STRING => "\"\""
-    case Descriptors.FieldDescriptor.JavaType.MESSAGE => s"$scalaType.messageCodec.defaultValue"
+    case Descriptors.FieldDescriptor.JavaType.MESSAGE => s"${f.getMessageType.scalaPath}.messageCodec.defaultValue"
     case Descriptors.FieldDescriptor.JavaType.ENUM =>
       if (f.getEnumType.isClosed) s"$scalaType.fromOrdinal(0)" else s"$scalaType.fromValue(0)"
   }
@@ -166,7 +181,7 @@ extension (o: Descriptors.OneofDescriptor) {
 
   def scalaTypeName: String = Utils.escapeScalaKeyword(Utils.pascalCase(o.getName))
 
-  def scalaType: String = o.getContainingType.scalaType + s".$scalaTypeName"
+  def scalaType: String = o.getContainingType.scalaPath + s".$scalaTypeName"
 
   /**
    * A oneof is required when every member that is not deprecated is marked
@@ -194,7 +209,7 @@ extension (e: Descriptors.EnumDescriptor) {
 
   def scalaType: String = {
     val name = Utils.escapeScalaKeyword(e.getName)
-    parent.fold(Utils.rootQualified(e.getFile.scalaPackage))(_.scalaType) + s".$name"
+    parent.fold(Utils.rootQualified(e.getFile.scalaPackage))(_.scalaPath) + s".$name"
   }
 
   def sourcePath: Seq[Int] = {
