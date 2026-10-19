@@ -203,13 +203,17 @@ object Generator {
   }
 
   /**
-   * The JVM limits a method's parameter list to 254 slots, and a `Long` or a
-   * `Double` takes two. A message over the limit is generated as consecutive
-   * chunks, each small enough to be one case class, and the message exports the
-   * chunks' fields so they read as if the message were one case class. The
-   * message's codec reads and writes the chunks' fields as its own.
+   * The maximum number of parameter slots in a generated case class.
+   *
+   * The JVM allows 254, a `Long` or a `Double` taking two, but HotSpot's C2
+   * compiler gives up on a method with too many arguments ("unsupported calling
+   * sequence") well before that, and then the generated constructor is neither
+   * compiled nor inlined into its callers. Using 64 slots ensures that the
+   * generated classes stay clear of that limit. A message with more members is
+   * generated as consecutive `PartN` case classes: the message holds them and
+   * exports their fields so they seem as if they are all in one case class.
    */
-  private val MaxParameterSlots = 254
+  private val MaxParameterSlots = 64
 
   private def isDoubleSlot(f: Descriptors.FieldDescriptor) = {
     !f.isCollection &&
