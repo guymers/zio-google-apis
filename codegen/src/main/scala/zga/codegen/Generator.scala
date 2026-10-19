@@ -336,11 +336,13 @@ object Generator {
     }
     val body = if (exports.isEmpty) "" else exports.mkString(" {\n", "\n", "\n}")
     val product =
-      if (parameters.isEmpty) ""
-      else
+      if (parameters.isEmpty) {
+        ""
+      } else {
         s"""case class $name(
           |  ${parameters.flatMap(printParameter(m, _)).mkString("\n  ")}
           |)$body""".stripMargin
+      }
     val objectDeclaration = s"${companionAnnotation}object $name${extendsClause(companionParent)} {"
     s"""
       |$memberDoc

@@ -3,7 +3,7 @@ package zga.codegen
 case class ZioGrpcOptions(
   classPrefix: String,
   pkgName: String,
-  servicesOnly: Set[String] = Set.empty,
+  servicesOnly: Set[String],
 )
 object ZioGrpcOptions {
 

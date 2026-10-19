@@ -44,7 +44,8 @@ Compile / doc / scalacOptions ++= Seq(
   s"-external-mappings:.*grpc-api.*::javadoc::https://javadoc.io/static/io.grpc/grpc-api/$grpcVersion/",
 )
 
-// Maven Central requires a javadoc jar but not its contents, the scaladoc of the generated code is hundreds of MB
+// Maven Central requires a javadoc jar, but it does not need to have any content
+// So avoid creating one as the scaladoc of the generated code is hundreds of MB
 Compile / packageDoc / mappings := Seq.empty
 
 Compile / console / scalacOptions ~= filterScalacConsoleOpts

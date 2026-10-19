@@ -62,9 +62,19 @@ private[codegen] object CodecGenerator {
   )
 
   /**
-   * A codec as the members of the object that holds it, and the parent and
-   * annotation of that object. The object itself is the codec, rather than an
-   * anonymous class of its own, which saves a class per message.
+   * The object itself is the codec, rather than an anonymous class of its own,
+   * which saves a class per message. Its parts are printed into the message's
+   * companion, or into an object of its own when the codec is split across
+   * methods.
+   *
+   * @param parent
+   *   the type that the object extends, or `None` when the message has no
+   *   fields and its codec is `MessageCodec.empty`
+   * @param members
+   *   the body of the object, which provides the codec as a `given`
+   * @param annotation
+   *   the annotations of the object, which suppress deprecation warnings when
+   *   the message has deprecated fields
    */
   case class Codec(parent: Option[String], members: String, annotation: String)
 

@@ -52,8 +52,8 @@ extension (d: Descriptors.Descriptor) {
   def parent: Option[Descriptors.Descriptor] = Option(d.getContainingType)
 
   /**
-   * True when the message has no fields, and so is generated as a plain object
-   * rather than a class.
+   * True when the message has no fields, and therefore should not generate a
+   * class.
    */
   def isEmpty: Boolean = d.getFields.isEmpty
 
@@ -66,8 +66,8 @@ extension (d: Descriptors.Descriptor) {
   }
 
   /**
-   * The Scala type of the message. A message without fields is an object, so
-   * its type is the singleton type of that object.
+   * The Scala type of the message. A message without fields has no class so its
+   * type is the singleton type of that object.
    */
   def scalaType: String = if (d.isEmpty) s"$scalaPath.type" else scalaPath
 

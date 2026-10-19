@@ -14,7 +14,7 @@ object ZioGrpcGeneratorTest extends ZIOSpecDefault {
   import TestDescriptors.routingRule
   import TestDescriptors.serviceDescriptor
 
-  private val options = ZioGrpcOptions(classPrefix = "Test", pkgName = "test")
+  private val options = ZioGrpcOptions(classPrefix = "Test", pkgName = "test", servicesOnly = Set.empty)
 
   override val spec = suite("ZioGrpcGenerator")(
     suite("file names")(

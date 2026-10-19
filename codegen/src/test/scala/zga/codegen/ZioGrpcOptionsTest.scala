@@ -9,7 +9,7 @@ object ZioGrpcOptionsTest extends ZIOSpecDefault {
     test("parses class_prefix and pkg_name") {
       assertTrue(
         ZioGrpcOptions.fromStr("class_prefix=Test;pkg_name=test") ==
-          Right(Some(ZioGrpcOptions(classPrefix = "Test", pkgName = "test"))),
+          Right(Some(ZioGrpcOptions(classPrefix = "Test", pkgName = "test", servicesOnly = Set.empty))),
       )
     },
     test("parses services_only") {
