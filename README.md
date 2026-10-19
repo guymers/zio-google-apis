@@ -12,7 +12,7 @@ Each client is a separate artifact:
 libraryDependencies += "io.github.guymers" %% "<client>" % "<version>"
 ```
 
-- [Ads](https://developers.google.com/google-ads/api/reference/rpc/v25/overview): `zga-ads`
+- [Ads](https://developers.google.com/google-ads/api/reference/rpc/v26/overview): `zga-ads`
 - [Analytics Data](https://developers.google.com/analytics/devguides/reporting/data/v1) and [Analytics Admin](https://developers.google.com/analytics/devguides/config/admin/v1): `zga-analytics`
 - [Cloud Error Reporting](https://docs.cloud.google.com/error-reporting/reference/rest): `zga-cloud-error-reporting`
 - [Cloud Key Management (KMS)](https://docs.cloud.google.com/kms/docs/reference/rpc/google.cloud.kms.v1): `zga-cloud-kms`

@@ -1,11 +1,11 @@
 package zga.benchmark
 
-import com.google.ads.googleads.v25.common.Metrics
-import com.google.ads.googleads.v25.common.Segments
-import com.google.ads.googleads.v25.enums.CampaignStatusEnum.CampaignStatus
-import com.google.ads.googleads.v25.resources.Campaign
-import com.google.ads.googleads.v25.services.GoogleAdsRow
-import com.google.ads.googleads.v25.services.SearchGoogleAdsResponse as JavaSearchGoogleAdsResponse
+import com.google.ads.googleads.v26.common.Metrics
+import com.google.ads.googleads.v26.common.Segments
+import com.google.ads.googleads.v26.enums.CampaignStatusEnum.CampaignStatus
+import com.google.ads.googleads.v26.resources.Campaign
+import com.google.ads.googleads.v26.services.GoogleAdsRow
+import com.google.ads.googleads.v26.services.SearchGoogleAdsResponse as JavaSearchGoogleAdsResponse
 import org.openjdk.jmh.annotations.*
 import zga.benchmark.SearchGoogleAdsResponseBenchmark.JavaResponse
 import zga.benchmark.SearchGoogleAdsResponseBenchmark.Page

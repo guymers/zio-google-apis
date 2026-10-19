@@ -10,7 +10,7 @@ import zio.ZIO
 
 object AdsAuthentication {
 
-  // https://github.com/googleads/google-ads-java/blob/47.0.0/google-ads/src/main/java/com/google/ads/googleads/lib/GoogleAdsClient.java#L170
+  // https://github.com/googleads/google-ads-java/blob/48.0.0/google-ads/src/main/java/com/google/ads/googleads/lib/GoogleAdsClient.java#L170
   val scopes = List(
     "https://www.googleapis.com/auth/adwords",
   )
@@ -48,7 +48,7 @@ object AdsAuthentication {
       override def parseAsciiString(serialized: String) = stringAsciiMarshaller.parseAsciiString(serialized).toLong
     }
 
-    // https://github.com/googleads/google-ads-java/blob/47.0.0/google-ads/src/main/java/com/google/ads/googleads/lib/GoogleAdsHeaderProvider.java#L66
+    // https://github.com/googleads/google-ads-java/blob/48.0.0/google-ads/src/main/java/com/google/ads/googleads/lib/GoogleAdsHeaderProvider.java#L66
     val LoginCustomerId = Metadata.Key.of("login-customer-id", longAsciiMarshaller)
     val LinkedCustomerId = Metadata.Key.of("linked-customer-id", longAsciiMarshaller)
   }
