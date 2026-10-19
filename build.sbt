@@ -84,7 +84,7 @@ lazy val benchmark = project.in(file("benchmark"))
   .settings(noPublishSettings)
   .settings(Seq(
     libraryDependencies ++= Seq(
-      "com.google.api-ads" % "google-ads-stubs-v25" % "47.0.0",
+      "com.google.api-ads" % "google-ads-stubs-v26" % "48.0.0",
     ),
   ))
   .dependsOn(ads)

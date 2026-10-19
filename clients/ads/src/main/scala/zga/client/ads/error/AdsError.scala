@@ -20,10 +20,10 @@ sealed abstract class AdsError(
 
 object AdsError {
 
-  // https://github.com/googleads/google-ads-java/blob/47.0.0/google-ads-stubs-v25/src/main/java/com/google/ads/googleads/v25/errors/GoogleAdsException.java#L57
-  private val FailureKey = Metadata.Key.of("google.ads.googleads.v25.errors.googleadsfailure-bin", Metadata.BINARY_BYTE_MARSHALLER)
+  // https://github.com/googleads/google-ads-java/blob/48.0.0/google-ads-stubs-v26/src/main/java/com/google/ads/googleads/v26/errors/GoogleAdsException.java#L57
+  private val FailureKey = Metadata.Key.of("google.ads.googleads.v26.errors.googleadsfailure-bin", Metadata.BINARY_BYTE_MARSHALLER)
 
-  // https://github.com/googleads/google-ads-java/blob/47.0.0/google-ads-stubs-lib/src/main/java/com/google/ads/googleads/lib/stubs/exceptions/BaseGoogleAdsException.java#L34
+  // https://github.com/googleads/google-ads-java/blob/48.0.0/google-ads-stubs-lib/src/main/java/com/google/ads/googleads/lib/stubs/exceptions/BaseGoogleAdsException.java#L34
   private val RequestIdKey = Metadata.Key.of("request-id", Metadata.ASCII_STRING_MARSHALLER)
 
   def extractRequestId(error: zga.error.Error): Option[RequestId] = {

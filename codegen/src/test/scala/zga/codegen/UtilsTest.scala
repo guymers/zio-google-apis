@@ -26,8 +26,8 @@ object UtilsTest extends ZIOSpecDefault {
       },
       test("drops ads' redundant googleads namespace segment") {
         assertTrue(Utils.generatedPackageParts("google.ads.googleads.v17") == List("zga", "google", "ads")) &&
-        assertTrue(Utils.generatedPackageParts("com.google.ads.googleads.v25.errors") == List("zga", "google", "ads", "errors")) &&
-        assertTrue(Utils.generatedPackageParts("com.google.ads.googleads.v25.services") == List("zga", "google", "ads", "services"))
+        assertTrue(Utils.generatedPackageParts("com.google.ads.googleads.v26.errors") == List("zga", "google", "ads", "errors")) &&
+        assertTrue(Utils.generatedPackageParts("com.google.ads.googleads.v26.services") == List("zga", "google", "ads", "services"))
       },
       test("leaves other packages alone") {
         assertTrue(Utils.generatedPackageParts("test") == List("test")) &&

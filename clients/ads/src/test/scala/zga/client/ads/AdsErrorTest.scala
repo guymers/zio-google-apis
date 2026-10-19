@@ -14,7 +14,7 @@ object AdsErrorTest extends ZIOSpecDefault {
     test("extract failure from metadata") {
       val failure = GoogleAdsFailure(errors = Chunk(GoogleAdsError(message = "custom")))
       val trailers = new Metadata()
-      val key = Metadata.Key.of("google.ads.googleads.v25.errors.googleadsfailure-bin", Metadata.BINARY_BYTE_MARSHALLER)
+      val key = Metadata.Key.of("google.ads.googleads.v26.errors.googleadsfailure-bin", Metadata.BINARY_BYTE_MARSHALLER)
       trailers.put(key, GoogleAdsFailure.messageCodec.toByteArray(failure))
 
       val error = zga.error.Error.InvalidArgument(
