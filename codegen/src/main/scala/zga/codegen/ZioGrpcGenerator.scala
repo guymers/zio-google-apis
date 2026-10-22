@@ -157,7 +157,7 @@ object ZioGrpcGenerator {
 
   private def interface(method: MethodDescriptor) = {
     s"""${scaladoc(method.comment)}def ${methodName(method)}${methodTypeParams(method)}(
-      |  request: ${methodInType(method)},
+      |  ${if (method.getInputType.isEmpty) "" else s"request: ${methodInType(method)},"}
       |  deadline: => _root_.scala.Option[$Deadline] = _root_.scala.None
       |)(using $Trace): ${methodOutType(method)}""".stripMargin
   }
@@ -176,7 +176,8 @@ object ZioGrpcGenerator {
     }
     val authCall = s"auth.metadata(channel.channel.authority, ${Utils.escapeScalaString(serviceName)}).handleStatus"
     val metadata = if (method.isServerStreaming) s"$ZStream.fromZIO($authCall)" else authCall
-    val callArgs = s"channel.channel, $clientName.Grpc.${methodConstant(method)}, opts, headers, request"
+    val requestCallArg = if (method.getInputType.isEmpty) method.getInputType.scalaPath else "request"
+    val callArgs = s"channel.channel, $clientName.Grpc.${methodConstant(method)}, opts, headers, $requestCallArg"
     val body =
       if (routingParameters.get(method).isEmpty) {
         s"""val opts = deadline.fold(options)(d => options.withDeadline(d))
@@ -190,7 +191,7 @@ object ZioGrpcGenerator {
           |}""".stripMargin
       }
     s"""def ${methodName(method)}${methodTypeParams(method)}(
-      |  request: ${methodInType(method)},
+      |  ${if (method.getInputType.isEmpty) "" else s"request: ${methodInType(method)},"}
       |  deadline: => _root_.scala.Option[$Deadline] = _root_.scala.None
       |)(using $Trace): ${methodOutType(method)} = {
       |  $metadata.flatMap { headers =>
