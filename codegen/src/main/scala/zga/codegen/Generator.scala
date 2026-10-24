@@ -12,6 +12,7 @@ object Generator {
 
   private val ReservedEnumMemberNames = Set(
     "fromValue",
+    "name",
     "valueMap",
     "numbers",
     "values",
@@ -134,6 +135,13 @@ object Generator {
     )
   }
 
+  /**
+   * The value's name as written in the proto file, e.g. `ENABLED`. Each case
+   * has that exact name, so it is the case's `toString`. An unknown number has
+   * no name, so an open enum's `Unrecognized` does not have this.
+   */
+  private val nameMethod = "def name: _root_.scala.Predef.String = toString"
+
   private def enumComment(e: Descriptors.EnumDescriptor) = {
     List(
       e.comment.map(Comments.formatAsScaladoc(_, ListMap.empty)),
@@ -165,6 +173,7 @@ object Generator {
       |    ${values.mkString("\n    ")}
       |
       |    $valueMethod
+      |    $nameMethod
       |  }
       |  export Recognized.*
       |
@@ -193,6 +202,7 @@ object Generator {
       |  ${values.mkString("\n  ")}
       |
       |  $valueMethod
+      |  $nameMethod
       |}
       |object $enumName {$numbers
       |  // the first of values sharing a number wins, as in protobuf-java
