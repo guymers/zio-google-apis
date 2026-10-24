@@ -101,7 +101,10 @@ object Generator {
   }
 
   private def printEnum(e: Descriptors.EnumDescriptor) = {
-    if (e.isClosed) printClosedEnum(e) else printOpenEnum(e)
+    JavaEnumType.of(e) match {
+      case Some(t) => JavaEnumType.printCodec(e, t)
+      case None => if (e.isClosed) printClosedEnum(e) else printOpenEnum(e)
+    }
   }
 
   private def printEnumValues(e: Descriptors.EnumDescriptor, reserved: Set[String]) = {

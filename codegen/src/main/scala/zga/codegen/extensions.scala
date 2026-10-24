@@ -66,10 +66,11 @@ extension (d: Descriptors.Descriptor) {
   }
 
   /**
-   * The Scala type of the message. A message without fields has no class so its
-   * type is the singleton type of that object.
+   * The Scala type of the message. Certain messages are replaced by a
+   * `java.time` type. A message without fields has no class so its type is the
+   * singleton type of that object.
    */
-  def scalaType: String = if (d.isEmpty) s"$scalaPath.type" else scalaPath
+  def scalaType: String = JavaTimeType.scalaType(d).getOrElse(if (d.isEmpty) s"$scalaPath.type" else scalaPath)
 
   def sourcePath: Seq[Int] = {
     if (d.isTopLevel) {
@@ -120,7 +121,8 @@ extension (f: Descriptors.FieldDescriptor) {
     case Descriptors.FieldDescriptor.JavaType.BYTE_STRING => "_root_.com.google.protobuf.ByteString"
     case Descriptors.FieldDescriptor.JavaType.STRING => "_root_.scala.Predef.String"
     case Descriptors.FieldDescriptor.JavaType.MESSAGE => f.getMessageType.scalaType
-    case Descriptors.FieldDescriptor.JavaType.ENUM => f.getEnumType.scalaType
+    case Descriptors.FieldDescriptor.JavaType.ENUM =>
+      JavaEnumType.of(f).fold(f.getEnumType.scalaType)(t => s"_root_.scala.Option[${t.scalaType}]")
   }
 
   def scalaTypeName: String = {
@@ -165,7 +167,9 @@ extension (f: Descriptors.FieldDescriptor) {
     case Descriptors.FieldDescriptor.JavaType.STRING => "\"\""
     case Descriptors.FieldDescriptor.JavaType.MESSAGE => s"${f.getMessageType.scalaPath}.messageCodec.defaultValue"
     case Descriptors.FieldDescriptor.JavaType.ENUM =>
-      if (f.getEnumType.isClosed) s"$scalaType.fromOrdinal(0)" else s"$scalaType.fromValue(0)"
+      JavaEnumType.of(f).fold {
+        if (f.getEnumType.isClosed) s"$scalaType.fromOrdinal(0)" else s"$scalaType.fromValue(0)"
+      }(_ => "_root_.scala.None")
   }
 
   def sourcePath: Seq[Int] = {
@@ -207,10 +211,12 @@ extension (e: Descriptors.EnumDescriptor) {
 
   def parent: Option[Descriptors.Descriptor] = Option(e.getContainingType)
 
-  def scalaType: String = {
+  def scalaPath: String = {
     val name = Utils.escapeScalaKeyword(e.getName)
     parent.fold(Utils.rootQualified(e.getFile.scalaPackage))(_.scalaPath) + s".$name"
   }
+
+  def scalaType: String = JavaEnumType.of(e).map(_.scalaType).getOrElse(scalaPath)
 
   def sourcePath: Seq[Int] = {
     if (e.isTopLevel) {

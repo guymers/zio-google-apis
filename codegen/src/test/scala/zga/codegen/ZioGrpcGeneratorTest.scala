@@ -1,7 +1,9 @@
 package zga.codegen
 
 import com.google.api.RoutingParameter
+import com.google.protobuf.DescriptorProtos.FieldDescriptorProto
 import com.google.protobuf.DescriptorProtos.SourceCodeInfo
+import com.google.protobuf.Descriptors
 import com.google.protobuf.compiler.PluginProtos
 import zio.test.ZIOSpecDefault
 import zio.test.assertTrue
@@ -10,6 +12,7 @@ import scala.jdk.CollectionConverters.*
 import scala.util.Try
 
 object ZioGrpcGeneratorTest extends ZIOSpecDefault {
+  import TestDescriptors.field
   import TestDescriptors.fileDescriptor
   import TestDescriptors.method
   import TestDescriptors.routingRule
@@ -178,6 +181,11 @@ object ZioGrpcGeneratorTest extends ZIOSpecDefault {
         assertTrue(output.contains("case unrecognized: _root_.test.Kind.Unrecognized => unrecognized.value.toString")) &&
         assertTrue(output.contains("case recognized: _root_.test.Kind.Recognized => recognized.toString"))
       },
+      test("sends a java.time DayOfWeek http path variable by its proto name") {
+        val file = withDayOfWeek(serviceDescriptor(method("GetThing", http = Some("/v1/{day_of_week}"))))
+        val output = ZioGrpcGenerator.printServiceFile(options, file)
+        assertTrue(output.contains("_root_.scala.Some(request.dayOfWeek.fold(\"DAY_OF_WEEK_UNSPECIFIED\")(_.toString))"))
+      },
       test("passes the routing constant to the call") {
         val file = serviceDescriptor(
           method("StreamThings", serverStreaming = true, routing = Some(routingRule("name" -> Some("{name=*}")))),
@@ -340,5 +348,20 @@ object ZioGrpcGeneratorTest extends ZIOSpecDefault {
       RoutingParameter.newBuilder.setField(field).setPathTemplate(template.getOrElse("")).build
     }
     options.copy(routing = Map(s"test.TestService.$methodName" -> routing))
+  }
+
+  /**
+   * The service file with a `google.type.DayOfWeek` field added to its request.
+   */
+  private def withDayOfWeek(file: Descriptors.FileDescriptor) = {
+    val proto = file.toProto.toBuilder.addDependency("google/type/dayofweek.proto")
+    proto.getMessageTypeBuilderList.asScala
+      .find(_.getName == "Request")
+      .foreach { request =>
+        val _ = request.addField(
+          field("day_of_week", 16, FieldDescriptorProto.Type.TYPE_ENUM, typeName = Some(".google.type.DayOfWeek")),
+        )
+      }
+    Descriptors.FileDescriptor.buildFrom(proto.build(), Array(com.google.`type`.DayOfWeek.getDescriptor.getFile))
   }
 }

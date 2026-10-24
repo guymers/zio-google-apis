@@ -11,6 +11,7 @@ import zio.Chunk
 
 import java.io.ByteArrayInputStream
 import java.io.InputStream
+import java.time.DateTimeException
 import scala.util.Try
 
 /**
@@ -49,6 +50,10 @@ abstract class MessageCodec[T] {
 }
 
 object MessageCodec {
+
+  given duration: MessageCodec[java.time.Duration] = zga.google.protobuf.Duration.messageCodec
+
+  given instant: MessageCodec[java.time.Instant] = zga.google.protobuf.Timestamp.messageCodec
 
   def apply[T](using codec: MessageCodec[T]): MessageCodec[T] = codec
 
@@ -166,6 +171,18 @@ object MessageCodec {
       throw RuntimeException(s"size inaccurate: $size != ${size - remaining}")
     }
     buffer
+  }
+
+  /**
+   * Converts the fields read into a `java.time` value, failing to read an
+   * invalid message, as protobuf does, when `java.time` cannot represent them.
+   */
+  private[zga] inline def javaTime[T](inline invalid: String)(inline convert: T): T = {
+    try {
+      convert
+    } catch {
+      case e: (DateTimeException | ArithmeticException) => throw InvalidProtocolBufferException(invalid, e)
+    }
   }
 
   /**

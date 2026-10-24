@@ -3,6 +3,7 @@ package zga.common
 import com.google.protobuf.ByteString
 import com.google.protobuf.CodedInputStream
 import com.google.protobuf.CodedOutputStream
+import com.google.protobuf.InvalidProtocolBufferException
 import com.google.protobuf.WireFormat
 import com.google.protobuf as pb
 import io.grpc.KnownLength
@@ -27,7 +28,6 @@ import zga.codectest.Sparse
 import zga.codectest.Sparses
 import zga.codectest.Unpacked
 import zga.google.protobuf.BytesValue
-import zga.google.protobuf.Duration
 import zga.google.protobuf.FieldMask
 import zga.google.protobuf.FloatValue
 import zga.google.protobuf.ListValue
@@ -42,6 +42,9 @@ import zio.test.assertTrue
 
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.time.DayOfWeek
+import java.time.Duration
+import java.time.Instant
 import scala.jdk.CollectionConverters.*
 import scala.util.Try
 
@@ -50,7 +53,7 @@ object MessageCodecTest extends ZIOSpecDefault {
   override val spec = suite("MessageCodec")(
     suite("round trips")(
       test("scalar") {
-        val value = Duration(seconds = 42L, nanos = 1)
+        val value = Duration.ofSeconds(42L, 1L)
         assertTrue(roundTrip(value) == value)
       },
       test("float") {
@@ -115,53 +118,177 @@ object MessageCodecTest extends ZIOSpecDefault {
         assertTrue(roundTrip(value) == value)
       },
     ),
+    suite("java time types")(
+      suite("timestamp")(
+        test("epoch") {
+          val value = Instant.EPOCH
+          assertTrue(roundTrip(value) == value)
+        },
+        test("after the epoch") {
+          val value = Instant.ofEpochSecond(42L, 1L)
+          assertTrue(roundTrip(value) == value)
+        },
+        test("before the epoch") {
+          val value = Instant.ofEpochSecond(-1L, 999_999_999L)
+          assertTrue(roundTrip(value) == value)
+        },
+        suite("timestamps match protobuf-java")({
+          def timestampMatchesJava(value: Instant) = {
+            val java = pb.Timestamp.newBuilder.setSeconds(value.getEpochSecond).setNanos(value.getNano).build().toByteArray
+            assertTrue(MessageCodec[Instant].toByteArray(value).sameElements(java)) &&
+            assertTrue(MessageCodec[Instant].parseFrom(java) == value)
+          }
+
+          test("epoch") {
+            timestampMatchesJava(Instant.EPOCH)
+          } ::
+          test("after the epoch") {
+            timestampMatchesJava(Instant.ofEpochSecond(42L, 1L))
+          } ::
+          test("before the epoch") {
+            timestampMatchesJava(Instant.ofEpochSecond(-1L, 999_999_999L))
+          } ::
+          test("the maximum valid timestamp") {
+            timestampMatchesJava(Instant.ofEpochSecond(253_402_300_799L, 999_999_999L))
+          } :: Nil
+        }),
+        test("rejects a timestamp that java.time.Instant cannot represent as an invalid message") {
+          val java = pb.Timestamp.newBuilder.setSeconds(Long.MaxValue).build()
+          assertTrue(isInvalid(Try(MessageCodec[Instant].parseFrom(java.toByteArray))))
+        },
+      ),
+      suite("duration")(
+        test("zero") {
+          val value = Duration.ZERO
+          assertTrue(roundTrip(value) == value)
+        },
+        test("positive") {
+          val value = Duration.ofSeconds(42L, 1L)
+          assertTrue(roundTrip(value) == value)
+        },
+        test("negative, under a second") {
+          val value = Duration.ofMillis(-500L)
+          assertTrue(roundTrip(value) == value)
+        },
+        test("negative, over a second") {
+          val value = Duration.ofSeconds(-2L, 250_000_000L)
+          assertTrue(roundTrip(value) == value)
+        },
+        suite("match protobuf-java's normalized encoding")({
+          def durationMatchesJava(value: Duration, seconds: Long, nanos: Int) = {
+            val java = pb.Duration.newBuilder.setSeconds(seconds).setNanos(nanos).build().toByteArray
+            assertTrue(MessageCodec[Duration].toByteArray(value).sameElements(java)) &&
+            assertTrue(MessageCodec[Duration].parseFrom(java) == value)
+          }
+
+          test("zero") {
+            durationMatchesJava(Duration.ZERO, 0L, 0)
+          } ::
+          test("positive") {
+            durationMatchesJava(Duration.ofSeconds(42L, 1L), 42L, 1)
+          } ::
+          test("negative, under a second") {
+            durationMatchesJava(Duration.ofMillis(-500L), 0L, -500_000_000)
+          } ::
+          test("negative, over a second") {
+            durationMatchesJava(Duration.ofSeconds(-2L, 250_000_000L), -1L, -750_000_000)
+          } ::
+          test("whole seconds") {
+            durationMatchesJava(Duration.ofSeconds(3L), 3L, 0)
+          } :: Nil
+        }),
+        test("reads a non-canonical negative duration as the same duration") {
+          val java = pb.Duration.newBuilder.setSeconds(-1L).setNanos(500_000_000).build()
+          assertTrue(MessageCodec[Duration].parseFrom(java.toByteArray) == Duration.ofMillis(-500L))
+        },
+        test("rejects a duration that java.time.Duration cannot represent as an invalid message") {
+          val java = pb.Duration.newBuilder.setSeconds(Long.MaxValue).setNanos(1_000_000_000).build()
+          assertTrue(isInvalid(Try(MessageCodec[Duration].parseFrom(java.toByteArray))))
+        },
+      ),
+      test("default values are not written") {
+        assertTrue(MessageCodec[Instant].toByteArray(Instant.EPOCH).isEmpty) &&
+        assertTrue(MessageCodec[Duration].toByteArray(Duration.ZERO).isEmpty)
+      },
+      test("day of week") {
+        assertTrue(zga.google.`type`.DayOfWeek.fromValue(1).contains(DayOfWeek.MONDAY)) &&
+        assertTrue(zga.google.`type`.DayOfWeek.fromValue(0).isEmpty) &&
+        assertTrue(zga.google.`type`.DayOfWeek.value(Some(DayOfWeek.SUNDAY)) == 7) &&
+        assertTrue(zga.google.`type`.DayOfWeek.value(None) == 0)
+      },
+      test("time of day keeps 24:00, which java.time.LocalTime cannot hold") {
+        val value = zga.google.`type`.TimeOfDay(hours = 24)
+        assertTrue(roundTrip(value) == value)
+      },
+      test("date time without an offset stays a local time") {
+        val bytes = encode { out =>
+          out.writeInt32(1, 2024)
+          out.writeInt32(2, 1)
+          out.writeInt32(3, 2)
+          out.writeInt32(4, 3)
+        }
+        val codec = MessageCodec[zga.google.`type`.DateTime]
+        assertTrue(codec.toByteArray(codec.parseFrom(bytes)).sameElements(bytes))
+      },
+    ),
     suite("matches protobuf-java")(
-      test("every scalar type") {
-        val values = List(
-          Scalars(
-            int32Value = Int.MaxValue,
-            int64Value = Long.MaxValue,
-            uint32Value = Int.MaxValue,
-            uint64Value = Long.MaxValue,
-            sint32Value = Int.MaxValue,
-            sint64Value = Long.MaxValue,
-            fixed32Value = Int.MaxValue,
-            fixed64Value = Long.MaxValue,
-            sfixed32Value = Int.MaxValue,
-            sfixed64Value = Long.MaxValue,
-            floatValue = 1.5f,
-            doubleValue = 2.5d,
-            boolValue = true,
-            stringValue = "ünïcødé ✓",
-            bytesValue = ByteString.copyFrom(Array[Byte](0, -1, 127)),
-          ),
-          Scalars(
-            int32Value = Int.MinValue,
-            int64Value = Long.MinValue,
-            uint32Value = -1,
-            uint64Value = -1L,
-            sint32Value = Int.MinValue,
-            sint64Value = Long.MinValue,
-            fixed32Value = -1,
-            fixed64Value = -1L,
-            sfixed32Value = Int.MinValue,
-            sfixed64Value = Long.MinValue,
-            floatValue = Float.MinValue,
-            doubleValue = Double.NegativeInfinity,
-            boolValue = true,
-            stringValue = "s",
-            bytesValue = ByteString.copyFromUtf8("b"),
-          ),
-          Scalars(int32Value = -1, sint32Value = -1, sint64Value = -1L, floatValue = Float.NaN, doubleValue = Double.MinPositiveValue),
-        )
-        assertTrue(values.forall { value =>
+      suite("every scalar type")({
+        def scalarsMatchJava(value: Scalars) = {
           val bytes = javaScalars(value).toByteArray
           val decoded = MessageCodec[Scalars].parseFrom(bytes)
-          MessageCodec[Scalars].toByteArray(value).sameElements(bytes) &&
+          assertTrue(MessageCodec[Scalars].toByteArray(value).sameElements(bytes)) &&
           // NaN is not equal to itself, so compare the re-encoded bytes
-          MessageCodec[Scalars].toByteArray(decoded).sameElements(bytes)
-        })
-      },
+          assertTrue(MessageCodec[Scalars].toByteArray(decoded).sameElements(bytes))
+        }
+
+        test("maximum integers") {
+          scalarsMatchJava(
+            Scalars(
+              int32Value = Int.MaxValue,
+              int64Value = Long.MaxValue,
+              uint32Value = Int.MaxValue,
+              uint64Value = Long.MaxValue,
+              sint32Value = Int.MaxValue,
+              sint64Value = Long.MaxValue,
+              fixed32Value = Int.MaxValue,
+              fixed64Value = Long.MaxValue,
+              sfixed32Value = Int.MaxValue,
+              sfixed64Value = Long.MaxValue,
+              floatValue = 1.5f,
+              doubleValue = 2.5d,
+              boolValue = true,
+              stringValue = "ünïcødé ✓",
+              bytesValue = ByteString.copyFrom(Array[Byte](0, -1, 127)),
+            ),
+          )
+        } ::
+        test("minimum values") {
+          scalarsMatchJava(
+            Scalars(
+              int32Value = Int.MinValue,
+              int64Value = Long.MinValue,
+              uint32Value = -1,
+              uint64Value = -1L,
+              sint32Value = Int.MinValue,
+              sint64Value = Long.MinValue,
+              fixed32Value = -1,
+              fixed64Value = -1L,
+              sfixed32Value = Int.MinValue,
+              sfixed64Value = Long.MinValue,
+              floatValue = Float.MinValue,
+              doubleValue = Double.NegativeInfinity,
+              boolValue = true,
+              stringValue = "s",
+              bytesValue = ByteString.copyFromUtf8("b"),
+            ),
+          )
+        } ::
+        test("negative one, NaN and the smallest positive double") {
+          scalarsMatchJava(
+            Scalars(int32Value = -1, sint32Value = -1, sint64Value = -1L, floatValue = Float.NaN, doubleValue = Double.MinPositiveValue),
+          )
+        } :: Nil
+      }),
       test("packed repeated fields") {
         val value = Repeated(
           ints = Chunk(1, -1, Int.MaxValue),
@@ -344,7 +471,7 @@ object MessageCodecTest extends ZIOSpecDefault {
     suite("presence")(
       test("a field without presence is not written when it holds its default value") {
         assertTrue(MessageCodec[Scalars].toByteArray(Scalars()).isEmpty) &&
-        assertTrue(MessageCodec[Duration].toByteArray(Duration()).isEmpty)
+        assertTrue(MessageCodec[Duration].toByteArray(Duration.ZERO).isEmpty)
       },
       test("negative zero is not a default value") {
         val value = Scalars(floatValue = -0.0f, doubleValue = -0.0d)
@@ -379,7 +506,7 @@ object MessageCodecTest extends ZIOSpecDefault {
           out.writeTag(104, WireFormat.WIRETYPE_END_GROUP)
           out.writeInt32(2, 7)
         }
-        assertTrue(MessageCodec[Duration].parseFrom(bytes) == Duration(seconds = 42L, nanos = 7))
+        assertTrue(MessageCodec[Duration].parseFrom(bytes) == Duration.ofSeconds(42L, 7L))
       },
       test("skips a known field with an unexpected wire type, as protobuf-java does") {
         val bytes = encode { out =>
@@ -387,7 +514,7 @@ object MessageCodecTest extends ZIOSpecDefault {
           out.writeInt32(2, 7)
         }
         assertTrue(pb.Duration.parseFrom(bytes).getSeconds == 0L) &&
-        assertTrue(MessageCodec[Duration].parseFrom(bytes) == Duration(nanos = 7))
+        assertTrue(MessageCodec[Duration].parseFrom(bytes) == Duration.ofNanos(7L))
       },
       test("rejects an end group tag that ends no group") {
         val bytes = encode(_.writeTag(5, WireFormat.WIRETYPE_END_GROUP))
@@ -465,9 +592,9 @@ object MessageCodecTest extends ZIOSpecDefault {
     ),
     suite("repeated occurrences")(
       test("the last value of a scalar field wins") {
-        val bytes = MessageCodec[Duration].toByteArray(Duration(seconds = 1L, nanos = 2)) ++
-          MessageCodec[Duration].toByteArray(Duration(seconds = 3L))
-        assertTrue(MessageCodec[Duration].parseFrom(bytes) == Duration(seconds = 3L, nanos = 2))
+        val bytes = MessageCodec[Duration].toByteArray(Duration.ofSeconds(1L, 2L)) ++
+          MessageCodec[Duration].toByteArray(Duration.ofSeconds(3L))
+        assertTrue(MessageCodec[Duration].parseFrom(bytes) == Duration.ofSeconds(3L, 2L))
       },
       test("a message field merges into the previous value, as protobuf-java does") {
         val first = Proto2Java.Node.newBuilder
@@ -607,17 +734,24 @@ object MessageCodecTest extends ZIOSpecDefault {
         assertTrue(Proto3Java.Interleaved.parseFrom(bytes) == java) &&
         assertTrue(MessageCodec[Interleaved].parseFrom(java.toByteArray) == value)
       },
-      test("a oneof in a chunk of a large message") {
-        val values = List(None, Some(Large.Choice.Name("")), Some(Large.Choice.Number(0L)))
-        assertTrue(values.forall { choice =>
-          val value = Large(part1 = Large.Part1(choice = choice))
-          MessageCodec[Large].parseFrom(MessageCodec[Large].toByteArray(value)) == value
-        })
-      },
+      suite("a oneof in a chunk of a large message")(
+        test("no member set") {
+          val value = Large(part1 = Large.Part1(choice = None))
+          assertTrue(roundTrip(value) == value)
+        },
+        test("a string member") {
+          val value = Large(part1 = Large.Part1(choice = Some(Large.Choice.Name(""))))
+          assertTrue(roundTrip(value) == value)
+        },
+        test("a number member") {
+          val value = Large(part1 = Large.Part1(choice = Some(Large.Choice.Number(0L))))
+          assertTrue(roundTrip(value) == value)
+        },
+      ),
     ),
     suite("api")(
       test("grpc marshaller") {
-        val value = Duration(seconds = 42L, nanos = 1)
+        val value = Duration.ofSeconds(42L, 1L)
         val marshaller = MessageCodec.marshaller[Duration]
         val stream = marshaller.stream(value)
         assertTrue(stream.isInstanceOf[KnownLength]) &&
@@ -625,21 +759,26 @@ object MessageCodecTest extends ZIOSpecDefault {
       },
       test("grpc marshaller reads an empty stream as the default value") {
         val marshaller = MessageCodec.marshaller[Duration]
-        assertTrue(marshaller.parse(marshaller.stream(Duration())) == Duration())
+        assertTrue(marshaller.parse(marshaller.stream(Duration.ZERO)) == Duration.ZERO)
       },
       test("grpc marshaller reads a stream of unknown length") {
-        val value = Duration(seconds = 42L, nanos = 1)
+        val value = Duration.ofSeconds(42L, 1L)
         val stream = new ByteArrayInputStream(MessageCodec[Duration].toByteArray(value))
         assertTrue(MessageCodec.marshaller[Duration].parse(stream) == value)
       },
       test("grpc marshaller fails an invalid message with an internal status, as protobuf-java does") {
         val marshaller = MessageCodec.marshaller[Duration]
-        val bytes = MessageCodec[Duration].toByteArray(Duration(seconds = 42L)).dropRight(1)
+        val bytes = MessageCodec[Duration].toByteArray(Duration.ofSeconds(42L)).dropRight(1)
         val result = Try(marshaller.parse(new ByteArrayInputStream(bytes)))
         assertTrue(result.failed.toOption.collect { case e: StatusRuntimeException => e.getStatus.getCode }.contains(Status.Code.INTERNAL))
       },
+      test("grpc marshaller fails a value java.time cannot represent with an internal status") {
+        val bytes = pb.Duration.newBuilder.setSeconds(Long.MaxValue).setNanos(1_000_000_000).build().toByteArray
+        val result = Try(MessageCodec.marshaller[Duration].parse(new ByteArrayInputStream(bytes)))
+        assertTrue(result.failed.toOption.collect { case e: StatusRuntimeException => e.getStatus.getCode }.contains(Status.Code.INTERNAL))
+      },
       test("safely parses a ByteString") {
-        val value = Duration(seconds = 42L, nanos = 1)
+        val value = Duration.ofSeconds(42L, 1L)
         val bytes = ByteString.copyFrom(MessageCodec[Duration].toByteArray(value))
         val truncated = ByteString.copyFrom(Array[Byte](0x0a, 0x05))
         assertTrue(MessageCodec[Duration].safeParseFrom(bytes) == Right(value)) &&
@@ -675,6 +814,8 @@ object MessageCodecTest extends ZIOSpecDefault {
     output.flush()
     buffer.toByteArray
   }
+
+  private def isInvalid(result: Try[?]) = result.failed.toOption.exists(_.isInstanceOf[InvalidProtocolBufferException])
 
   private def roundTrip[A](value: A)(using messageCodec: MessageCodec[A]) = {
     messageCodec.parseFrom(messageCodec.toByteArray(value))
