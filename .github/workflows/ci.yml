@@ -34,6 +34,9 @@ jobs:
       - name: Compile
         run: sbt --client Test/compile
 
+      - name: Compile IT tests
+        run: sbt --client itTests/compile
+
       - name: Test
         run: sbt --client test
 

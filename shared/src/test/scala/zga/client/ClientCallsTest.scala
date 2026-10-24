@@ -25,6 +25,8 @@ object ClientCallsTest extends ZIOSpecDefault {
 
   private val headerKey = Metadata.Key.of("test-header", Metadata.ASCII_STRING_MARSHALLER)
 
+  private val nameRouting = List(Routing.Parameter[String](request => List("name" -> request)))
+
   override val spec = suite("ClientCalls")(
     suite("newCall") {
       val method = methodDescriptor(MethodDescriptor.MethodType.UNARY)
@@ -65,7 +67,7 @@ object ClientCallsTest extends ZIOSpecDefault {
         for {
           headers <- SafeMetadata.make
           _ <- headers.put(headerKey, "value")
-          response <- ClientCalls.unary(channel(call), method, CallOptions.DEFAULT, headers, "request")
+          response <- ClientCalls.unary(channel(call), method, CallOptions.DEFAULT, ZIO.succeed(headers), Nil, "request")
         } yield {
           assertTrue(response == "response") &&
           assertTrue(call.sent == List("request")) &&
@@ -78,10 +80,19 @@ object ClientCallsTest extends ZIOSpecDefault {
         val call = new FakeClientCall[String, String](List("first", "second", "third"))
         for {
           headers <- SafeMetadata.make
-          exit <- ClientCalls.unary(channel(call), method, CallOptions.DEFAULT, headers, "request").exit
+          exit <- ClientCalls.unary(channel(call), method, CallOptions.DEFAULT, ZIO.succeed(headers), Nil, "request").exit
         } yield {
           assertErrorIs[Error.Internal](exit) &&
           assertTrue(call.cancelled.contains("onMessage called more than once for unary call"))
+        }
+      } ::
+      test("sets the routing header from the request") {
+        val call = new FakeClientCall[String, String](List("response"))
+        for {
+          headers <- SafeMetadata.make
+          _ <- ClientCalls.unary(channel(call), method, CallOptions.DEFAULT, ZIO.succeed(headers), nameRouting, "request")
+        } yield {
+          assertTrue(call.startHeaders.exists(_.get(Routing.RequestParamsKey) == "name=request"))
         }
       } :: Nil
     },
@@ -93,7 +104,7 @@ object ClientCallsTest extends ZIOSpecDefault {
         for {
           headers <- SafeMetadata.make
           fiber <- ClientCalls
-            .clientStreaming(channel(call), method, CallOptions.DEFAULT, headers, ZStream("a", "b"))
+            .clientStreaming(channel(call), method, CallOptions.DEFAULT, ZIO.succeed(headers), Nil, ZStream("a", "b"))
             .fork
           _ <- ZIO.yieldNow.repeatUntil(_ => call.readyChecks > 0)
           sentBeforeReady = call.sent
@@ -111,7 +122,7 @@ object ClientCallsTest extends ZIOSpecDefault {
         for {
           headers <- SafeMetadata.make
           exit <- ClientCalls
-            .clientStreaming(channel(call), method, CallOptions.DEFAULT, headers, ZStream.never)
+            .clientStreaming(channel(call), method, CallOptions.DEFAULT, ZIO.succeed(headers), Nil, ZStream.never)
             .exit
         } yield {
           assertErrorIs[Error.PermissionDenied](exit)
@@ -123,10 +134,20 @@ object ClientCallsTest extends ZIOSpecDefault {
         for {
           headers <- SafeMetadata.make
           exit <- ClientCalls
-            .clientStreaming(channel(call), method, CallOptions.DEFAULT, headers, req)
+            .clientStreaming(channel(call), method, CallOptions.DEFAULT, ZIO.succeed(headers), Nil, req)
             .exit
         } yield {
           assertErrorIs[Error.Aborted](exit)
+        }
+      } ::
+      test("sets the routing header from the first request") {
+        val call = new FakeClientCall[String, String](List("response"))
+        for {
+          headers <- SafeMetadata.make
+          _ <- ClientCalls.clientStreaming(channel(call), method, CallOptions.DEFAULT, ZIO.succeed(headers), nameRouting, ZStream("a", "b"))
+        } yield {
+          assertTrue(call.startHeaders.exists(_.get(Routing.RequestParamsKey) == "name=a")) &&
+          assertTrue(call.sent == List("a", "b"))
         }
       } :: Nil
     },
@@ -138,7 +159,7 @@ object ClientCallsTest extends ZIOSpecDefault {
         for {
           headers <- SafeMetadata.make
           values <- ClientCalls
-            .serverStreaming(channel(call), method, CallOptions.DEFAULT, headers, "request")
+            .serverStreaming(channel(call), method, CallOptions.DEFAULT, ZIO.succeed(headers), Nil, "request")
             .runCollect
         } yield {
           assertTrue(values == Chunk("first", "second", "third")) &&
@@ -154,7 +175,7 @@ object ClientCallsTest extends ZIOSpecDefault {
         for {
           headers <- SafeMetadata.make
           values <- ClientCalls
-            .serverStreaming(channel(call), method, CallOptions.DEFAULT, headers, "request")
+            .serverStreaming(channel(call), method, CallOptions.DEFAULT, ZIO.succeed(headers), Nil, "request")
             .take(1)
             .runCollect
         } yield {
@@ -167,12 +188,21 @@ object ClientCallsTest extends ZIOSpecDefault {
         for {
           headers <- SafeMetadata.make
           exit <- ClientCalls
-            .serverStreaming(channel(call), method, CallOptions.DEFAULT, headers, "request")
+            .serverStreaming(channel(call), method, CallOptions.DEFAULT, ZIO.succeed(headers), Nil, "request")
             .runCollect
             .exit
         } yield {
           assertTrue(exit.isFailure) &&
           assertTrue(call.cancelled == List("ZIO Failure"))
+        }
+      } ::
+      test("sets the routing header from the request") {
+        val call = new FakeClientCall[String, String](List("response"))
+        for {
+          headers <- SafeMetadata.make
+          _ <- ClientCalls.serverStreaming(channel(call), method, CallOptions.DEFAULT, ZIO.succeed(headers), nameRouting, "request").runDrain
+        } yield {
+          assertTrue(call.startHeaders.exists(_.get(Routing.RequestParamsKey) == "name=request"))
         }
       } :: Nil
     },
@@ -184,7 +214,7 @@ object ClientCallsTest extends ZIOSpecDefault {
         for {
           headers <- SafeMetadata.make
           values <- ClientCalls
-            .bidirectional(channel(call), method, CallOptions.DEFAULT, headers, ZStream("a", "b"))
+            .bidirectional(channel(call), method, CallOptions.DEFAULT, ZIO.succeed(headers), Nil, ZStream("a", "b"))
             .runCollect
         } yield {
           assertTrue(values == Chunk("first", "second")) &&
@@ -199,7 +229,7 @@ object ClientCallsTest extends ZIOSpecDefault {
         for {
           headers <- SafeMetadata.make
           values <- ClientCalls
-            .bidirectional(channel(call), method, CallOptions.DEFAULT, headers, ZStream.never)
+            .bidirectional(channel(call), method, CallOptions.DEFAULT, ZIO.succeed(headers), Nil, ZStream.never)
             .runCollect
         } yield {
           assertTrue(values == Chunk("first", "second"))
@@ -211,11 +241,21 @@ object ClientCallsTest extends ZIOSpecDefault {
         for {
           headers <- SafeMetadata.make
           exit <- ClientCalls
-            .bidirectional(channel(call), method, CallOptions.DEFAULT, headers, req)
+            .bidirectional(channel(call), method, CallOptions.DEFAULT, ZIO.succeed(headers), Nil, req)
             .runCollect
             .exit
         } yield {
           assertErrorIs[Error.Aborted](exit)
+        }
+      } ::
+      test("sets the routing header from the first request") {
+        val call = new FakeClientCall[String, String](List("response"))
+        for {
+          headers <- SafeMetadata.make
+          _ <- ClientCalls.bidirectional(channel(call), method, CallOptions.DEFAULT, ZIO.succeed(headers), nameRouting, ZStream("a", "b")).runDrain
+        } yield {
+          assertTrue(call.startHeaders.exists(_.get(Routing.RequestParamsKey) == "name=a")) &&
+          assertTrue(call.sent == List("a", "b"))
         }
       } :: Nil
     },

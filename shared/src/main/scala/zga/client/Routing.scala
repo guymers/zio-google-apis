@@ -1,10 +1,19 @@
 package zga.client
 
+import io.grpc.Deadline
 import io.grpc.Metadata
+import io.grpc.Status
+import zio.Chunk
+import zio.Clock
+import zio.Duration
+import zio.Exit
+import zio.Scope
 import zio.Trace
 import zio.ZIO
+import zio.stream.ZStream
 
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.TimeUnit
 import scala.collection.mutable
 
 /**
@@ -12,9 +21,9 @@ import scala.collection.mutable
  * routing parameters of a method's `google.api.http` path variables when it has
  * no routing option.
  *
- * A routed method's parameters are extracted from the request and sent in the
- * `x-goog-request-params` metadata header so that Google's infrastructure can
- * route the request. See
+ * A routed method's parameters are extracted from the request, or from the
+ * first request of a client stream, and sent in the `x-goog-request-params`
+ * metadata header so that Google's infrastructure can route the request. See
  * [[https://google.aip.dev/client-libraries/4222 AIP-4222: Routing headers]]
  * for the specification, and google/api/routing.proto for the annotation.
  */
@@ -39,10 +48,73 @@ object Routing {
     request: A,
     parameters: List[Parameter[A]],
   )(using Trace): ZIO[Any, Nothing, Unit] = {
-    requestParams(request, parameters).fold(ZIO.unit) { value =>
-      headers.putIfAbsent(RequestParamsKey, value).unit
+    if (parameters.isEmpty) {
+      ZIO.unit
+    } else {
+      requestParams(request, parameters).fold(ZIO.unit) { value =>
+        headers.putIfAbsent(RequestParamsKey, value).unit
+      }
     }
   }
+
+  /**
+   * Fetches `headers` and adds the `x-goog-request-params` header to them from
+   * the first request of a client stream, unless it is already present.
+   *
+   * The header must be set before the gRPC call is made, so this waits for
+   * `requests` to emit its first request, and only then fetches `headers`, so
+   * that credentials are not held during the wait. gRPC cannot enforce
+   * `deadline` on a call that has not been made yet, so this wait enforces it
+   * instead, in real time as gRPC does: if the first request has not arrived by
+   * then, it fails with `DEADLINE_EXCEEDED`.
+   *
+   * The returned stream matches `requests`. Its resources are released when it
+   * ends, or when the enclosing scope closes if it is not run to the end.
+   */
+  def setFirstRequestParams[R, A](
+    headers: ZIO[Any, Status, SafeMetadata],
+    requests: ZStream[R, Status, A],
+    parameters: List[Parameter[A]],
+    deadline: Option[Deadline],
+  )(using Trace): ZIO[R & Scope, Status, (SafeMetadata, ZStream[R, Status, A])] = {
+    if (parameters.isEmpty) {
+      headers.map(_ -> requests)
+    } else {
+      for {
+        // a scope of its own, so that `requests` release when it ends rather than when the call ends
+        scope <- ZIO.scopeWith(_.fork)
+        pull <- scope.extend[R](requests.toPull)
+        first <- deadline match {
+          case None => firstChunk(pull)
+          case Some(d) => firstChunk(pull).raceFirst(deadlineExceeded(d))
+        }
+        metadata <- headers
+        _ <- first.flatMap(_.headOption).fold(ZIO.unit)(setRequestParams(metadata, _, parameters))
+      } yield {
+        val stream = first match {
+          case None => ZStream.empty
+          case Some(chunk) => ZStream.fromChunk(chunk) ++ ZStream.repeatZIOChunkOption(pull)
+        }
+        metadata -> stream.ensuring(scope.close(Exit.unit))
+      }
+    }
+  }
+
+  private def firstChunk[R, E, A](pull: ZIO[R, Option[E], Chunk[A]])(using Trace): ZIO[R, E, Option[Chunk[A]]] = {
+    pull.unsome.flatMap {
+      case Some(chunk) if chunk.isEmpty => firstChunk(pull)
+      case other => ZIO.succeed(other)
+    }
+  }
+
+  private val FirstRequestDeadlineExceeded = Status.DEADLINE_EXCEEDED.withDescription("deadline exceeded waiting for the first request")
+
+  // the live clock, as the deadline is measured in real time, even when a test clock is in use
+  private def deadlineExceeded(deadline: Deadline)(using Trace) = {
+    Clock.ClockLive.sleep(remaining(deadline)) *> ZIO.fail(FirstRequestDeadlineExceeded)
+  }
+
+  private def remaining(deadline: Deadline) = Duration.fromNanos(deadline.timeRemaining(TimeUnit.NANOSECONDS).max(0L))
 
   /**
    * Returns the `x-goog-request-params` value for the given request.

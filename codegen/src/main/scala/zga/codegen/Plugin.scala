@@ -76,6 +76,7 @@ object Plugin {
     val filesToGenerate = request.getFileToGenerateList.asScala.toList.map(fileName => fileName -> fileDescriptors(fileName))
     val servicesOnly = zioGrpcOptions.fold(Set.empty[String])(_.servicesOnly)
     validateServicesOnly(servicesOnly, filesToGenerate)
+    validateRouting(zioGrpcOptions.fold(Set.empty[String])(_.routing.keySet), filesToGenerate)
 
     filesToGenerate.foreach { (fileName, f) =>
       if (!servicesOnly.contains(fileName)) {
@@ -107,6 +108,19 @@ object Plugin {
           throw IllegalArgumentException(s"services_only names '$name', which has no services")
         case Some(_) => ()
       }
+    }
+  }
+
+  /**
+   * Every method named by the `routing` option must be a method of a service in
+   * the files being generated.
+   */
+  private def validateRouting(methods: Set[String], filesToGenerate: List[(String, Descriptors.FileDescriptor)]): Unit = {
+    val generated = filesToGenerate
+      .flatMap((_, f) => f.getServices.asScala.flatMap(_.getMethods.asScala).map(_.getFullName))
+      .toSet
+    methods.toList.sorted.find(!generated.contains(_)).foreach { name =>
+      throw IllegalArgumentException(s"routing names '$name', which is not a method of a file to generate")
     }
   }
 

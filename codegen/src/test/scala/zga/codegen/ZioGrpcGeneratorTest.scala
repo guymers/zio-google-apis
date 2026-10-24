@@ -1,5 +1,6 @@
 package zga.codegen
 
+import com.google.api.RoutingParameter
 import com.google.protobuf.DescriptorProtos.SourceCodeInfo
 import com.google.protobuf.compiler.PluginProtos
 import zio.test.ZIOSpecDefault
@@ -14,7 +15,12 @@ object ZioGrpcGeneratorTest extends ZIOSpecDefault {
   import TestDescriptors.routingRule
   import TestDescriptors.serviceDescriptor
 
-  private val options = ZioGrpcOptions(classPrefix = "Test", pkgName = "test", servicesOnly = Set.empty)
+  private val options = ZioGrpcOptions(
+    classPrefix = "Test",
+    pkgName = "test",
+    servicesOnly = Set.empty,
+    routing = Map.empty,
+  )
 
   override val spec = suite("ZioGrpcGenerator")(
     suite("file names")(
@@ -172,14 +178,21 @@ object ZioGrpcGeneratorTest extends ZIOSpecDefault {
         assertTrue(output.contains("case unrecognized: _root_.test.Kind.Unrecognized => unrecognized.value.toString")) &&
         assertTrue(output.contains("case recognized: _root_.test.Kind.Recognized => recognized.toString"))
       },
-      test("wraps the routing metadata in a stream for a server-streaming method") {
+      test("passes the routing constant to the call") {
         val file = serviceDescriptor(
           method("StreamThings", serverStreaming = true, routing = Some(routingRule("name" -> Some("{name=*}")))),
         )
         val output = ZioGrpcGenerator.printServiceFile(options, file)
-        assertTrue(output.contains("ROUTING_STREAM_THINGS")) &&
         assertTrue(
-          output.contains("_root_.zio.stream.ZStream.fromZIO(_root_.zga.client.Routing.setRequestParams(headers, request"),
+          output.contains(
+            "_root_.zga.client.ClientCalls.serverStreaming(channel.channel, TestClient.Grpc.METHOD_STREAM_THINGS, opts, auth.metadata(channel.channel.authority, \"test.TestService\"), TestClient.Grpc.ROUTING_STREAM_THINGS, request)",
+          ),
+        )
+      },
+      test("passes no routing to the call of a method without routing") {
+        val output = ZioGrpcGenerator.printServiceFile(options, serviceDescriptor(method("GetThing")))
+        assertTrue(
+          output.contains("_root_.zga.client.ClientCalls.unary(channel.channel, TestClient.Grpc.METHOD_GET_THING, opts, auth.metadata(channel.channel.authority, \"test.TestService\"), _root_.scala.Nil, request)"),
         )
       },
       test("escapes a control character in a template literal") {
@@ -192,6 +205,84 @@ object ZioGrpcGeneratorTest extends ZIOSpecDefault {
       test("omits the routing constant when there are no parameters") {
         val output = ZioGrpcGenerator.printServiceFile(options, serviceDescriptor(method("GetThing")))
         assertTrue(!output.contains("ROUTING_GET_THING"))
+      },
+    ),
+    suite("added routing")(
+      test("routes a client-streaming method on its first request") {
+        val file = serviceDescriptor(method("PutThings", clientStreaming = true))
+        val output = ZioGrpcGenerator.printServiceFile(withRouting("PutThings", "item.name" -> Some("{name=**}")), file)
+        assertTrue(output.contains("request.item.flatMap")) &&
+        assertTrue(
+          output.contains(
+            "_root_.zga.client.ClientCalls.clientStreaming(channel.channel, TestClient.Grpc.METHOD_PUT_THINGS, opts, auth.metadata(channel.channel.authority, \"test.TestService\"), TestClient.Grpc.ROUTING_PUT_THINGS, request)",
+          ),
+        )
+      },
+      test("routes a bidirectional method on its first request") {
+        val file = serviceDescriptor(method("SyncThings", clientStreaming = true, serverStreaming = true))
+        val output = ZioGrpcGenerator.printServiceFile(withRouting("SyncThings", "name" -> None), file)
+        assertTrue(
+          output.contains(
+            "_root_.zga.client.ClientCalls.bidirectional(channel.channel, TestClient.Grpc.METHOD_SYNC_THINGS, opts, auth.metadata(channel.channel.authority, \"test.TestService\"), TestClient.Grpc.ROUTING_SYNC_THINGS, request)",
+          ),
+        )
+      },
+      test("adds routing to a method that has none") {
+        val file = serviceDescriptor(method("GetThing"))
+        val output = ZioGrpcGenerator.printServiceFile(withRouting("GetThing", "item.name" -> None), file)
+        assertTrue(output.contains("\"item.name\","))
+      },
+      test("adds to a method's routing option") {
+        val file = serviceDescriptor(method("GetThing", routing = Some(routingRule("parent" -> None))))
+        val output = ZioGrpcGenerator.printServiceFile(withRouting("GetThing", "item.name" -> None), file)
+        assertTrue(output.indexOf("\"parent\",") >= 0) &&
+        assertTrue(output.indexOf("\"parent\",") < output.indexOf("\"item.name\","))
+      },
+      test("replaces a client-streaming method's routing option") {
+        val file = serviceDescriptor(
+          method("PutThings", clientStreaming = true, routing = Some(routingRule("parent" -> None))),
+        )
+        val output = ZioGrpcGenerator.printServiceFile(withRouting("PutThings", "item.name" -> None), file)
+        assertTrue(!output.contains("\"parent\",")) &&
+        assertTrue(output.contains("\"item.name\","))
+      },
+      test("rejects routing that drops an http path variable") {
+        val file = serviceDescriptor(method("GetThing", http = Some("/v1/{name=things/*}")))
+        val error = Try(ZioGrpcGenerator.printServiceFile(withRouting("GetThing", "item.name" -> None), file)).failed.toOption
+        assertTrue(
+          error.exists(_.getMessage ==
+            "test.TestService.GetThing: the routing plugin option replaces the google.api.http path variables, so must also route on 'name'"),
+        )
+      },
+      test("replaces the http path variables with routing that also routes on them") {
+        val file = serviceDescriptor(method("GetThing", http = Some("/v1/{name=things/*}")))
+        val output = ZioGrpcGenerator.printServiceFile(withRouting("GetThing", "name" -> Some("{name=things/*}"), "item.name" -> None), file)
+        assertTrue(output.contains("\"name\",")) &&
+        assertTrue(output.contains("_root_.zga.client.Routing.Segment.Literal(\"things\")")) &&
+        assertTrue(output.contains("\"item.name\","))
+      },
+      // google/api/routing.proto allows a field in several routing parameters, each with its own template
+      test("adds a template for a field the routing option already routes") {
+        val file = serviceDescriptor(method("GetThing", routing = Some(routingRule("parent" -> None))))
+        val output = ZioGrpcGenerator.printServiceFile(withRouting("GetThing", "parent" -> Some("{parent=**}")), file)
+        assertTrue(output.contains("\"parent\",")) &&
+        assertTrue(output.contains("_root_.zga.client.Routing.Segment.Variable(\"parent\""))
+      },
+      test("rejects a field the request does not have") {
+        val file = serviceDescriptor(method("PutThings", clientStreaming = true))
+        val error = Try(ZioGrpcGenerator.printServiceFile(withRouting("PutThings", "missing" -> None), file)).failed.toOption
+        assertTrue(error.exists(_.getMessage.startsWith("test.TestService.PutThings: test.Request has no field 'missing'")))
+      },
+      test("rejects a method that is not generated") {
+        val request = PluginProtos.CodeGeneratorRequest.newBuilder
+          .addFileToGenerate("test/service.proto")
+          .addProtoFile(fileDescriptor(List(method("GetThing")), withService = true).toProto)
+          .setParameter("class_prefix=Test;pkg_name=test;routing=test.TestService.Missing:name")
+          .build()
+
+        val error = Try(Plugin.generateRequest(request)).failed.toOption
+
+        assertTrue(error.exists(_.getMessage == "routing names 'test.TestService.Missing', which is not a method of a file to generate"))
       },
     ),
     suite("services_only")(
@@ -243,4 +334,11 @@ object ZioGrpcGeneratorTest extends ZIOSpecDefault {
       },
     ),
   )
+
+  private def withRouting(methodName: String, parameters: (String, Option[String])*) = {
+    val routing = parameters.toList.map { (field, template) =>
+      RoutingParameter.newBuilder.setField(field).setPathTemplate(template.getOrElse("")).build
+    }
+    options.copy(routing = Map(s"test.TestService.$methodName" -> routing))
+  }
 }

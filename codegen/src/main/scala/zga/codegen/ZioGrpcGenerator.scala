@@ -1,5 +1,6 @@
 package zga.codegen
 
+import com.google.api.RoutingParameter
 import com.google.protobuf.Descriptors
 import com.google.protobuf.Descriptors.MethodDescriptor
 import com.google.protobuf.Descriptors.ServiceDescriptor
@@ -23,7 +24,6 @@ object ZioGrpcGenerator {
   private val ZLayer = "_root_.zio.ZLayer"
   private val ZStream = "_root_.zio.stream.ZStream"
   private val MessageCodec = "_root_.zga.common.MessageCodec"
-  private val RoutingType = "_root_.zga.client.Routing"
   private val WithAuth = "withAuth"
 
   def hasServices(f: Descriptors.FileDescriptor): Boolean = !f.getServices.isEmpty
@@ -35,7 +35,7 @@ object ZioGrpcGenerator {
   def printServiceFile(options: ZioGrpcOptions, f: Descriptors.FileDescriptor): String = {
     val services = f.getServices.asScala.toList
     validateServiceNames(f, services)
-    val routingParameters = RoutingParameters.parse(f)
+    val routingParameters = RoutingParameters.parse(f, options.routing)
     s"""${Comments.header(f).map(Comments.formatAsMultiLineComment(_)).getOrElse("")}
       |package zga.client.${options.pkgName}
       |
@@ -86,7 +86,6 @@ object ZioGrpcGenerator {
       |  auth: $auth,
       |  options: $CallOptions
       |) extends $client {
-      |  import _root_.zga.error.syntax.*
       |
       |  def $WithAuth(auth: $auth): $client = {
       |    new ${client}Live(channel, auth, options)
@@ -174,29 +173,16 @@ object ZioGrpcGenerator {
       case m if m.isServerStreaming => s"$ClientCalls.serverStreaming"
       case _ => s"$ClientCalls.unary"
     }
-    val authCall = s"auth.metadata(channel.channel.authority, ${Utils.escapeScalaString(serviceName)}).handleStatus"
-    val metadata = if (method.isServerStreaming) s"$ZStream.fromZIO($authCall)" else authCall
+    val headers = s"auth.metadata(channel.channel.authority, ${Utils.escapeScalaString(serviceName)})"
     val requestCallArg = if (method.getInputType.isEmpty) method.getInputType.scalaPath else "request"
-    val callArgs = s"channel.channel, $clientName.Grpc.${methodConstant(method)}, opts, headers, $requestCallArg"
-    val body =
-      if (routingParameters.get(method).isEmpty) {
-        s"""val opts = deadline.fold(options)(d => options.withDeadline(d))
-          |$call($callArgs)""".stripMargin
-      } else {
-        val setRequestParams = s"$RoutingType.setRequestParams(headers, request, $clientName.Grpc.${routingConstantName(method)})"
-        val effect = if (method.isServerStreaming) s"$ZStream.fromZIO($setRequestParams)" else setRequestParams
-        s"""$effect *> {
-          |  val opts = deadline.fold(options)(d => options.withDeadline(d))
-          |  $call($callArgs)
-          |}""".stripMargin
-      }
+    val routing =
+      if (routingParameters.get(method).isEmpty) "_root_.scala.Nil" else s"$clientName.Grpc.${routingConstantName(method)}"
     s"""def ${methodName(method)}${methodTypeParams(method)}(
       |  ${if (method.getInputType.isEmpty) "" else s"request: ${methodInType(method)},"}
       |  deadline: => _root_.scala.Option[$Deadline] = _root_.scala.None
       |)(using $Trace): ${methodOutType(method)} = {
-      |  $metadata.flatMap { headers =>
-      |    $body
-      |  }
+      |  val opts = deadline.fold(options)(d => options.withDeadline(d))
+      |  $call(channel.channel, $clientName.Grpc.${methodConstant(method)}, opts, $headers, $routing, $requestCallArg)
       |}""".stripMargin
   }
 
@@ -375,10 +361,10 @@ object RoutingParameters {
     def get(method: MethodDescriptor) = params.getOrElse(method.getFullName, Nil)
   }
 
-  def parse(f: Descriptors.FileDescriptor): RoutingParameters = {
+  def parse(f: Descriptors.FileDescriptor, added: Map[String, List[RoutingParameter]]): RoutingParameters = {
     f.getServices.asScala
       .flatMap(_.getMethods.asScala)
-      .map(method => method.getFullName -> Routing.parameters(method))
+      .map(method => method.getFullName -> Routing.parameters(method, added.getOrElse(method.getFullName, Nil)))
       .toMap
   }
 }

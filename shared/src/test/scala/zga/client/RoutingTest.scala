@@ -1,11 +1,17 @@
 package zga.client
 
+import io.grpc.Deadline
+import io.grpc.Status
+import zio.Chunk
+import zio.Ref
 import zio.ZIO
 import zio.durationInt
+import zio.stream.ZStream
 import zio.test.TestAspect
 import zio.test.ZIOSpecDefault
 import zio.test.assertTrue
 
+import java.util.concurrent.TimeUnit
 import scala.jdk.CollectionConverters.*
 
 object RoutingTest extends ZIOSpecDefault {
@@ -205,6 +211,127 @@ object RoutingTest extends ZIOSpecDefault {
           values = requestParams(headers)
         } yield {
           assertTrue(values.length == 1)
+        }
+      },
+    ),
+    suite("first request params metadata")(
+      test("sets the header from the first request and keeps every request") {
+        val requests = ZStream(Request("first"), Request("second")) ++ ZStream(Request("third"))
+        for {
+          headers <- SafeMetadata.make
+          sent <- ZIO.scoped(Routing.setFirstRequestParams(ZIO.succeed(headers), requests, nameParameter, None).flatMap(_._2.runCollect))
+          values = requestParams(headers)
+        } yield {
+          assertTrue(values == List("name=first")) &&
+          assertTrue(sent == Chunk(Request("first"), Request("second"), Request("third")))
+        }
+      },
+      test("skips an empty first chunk") {
+        val requests = ZStream.fromChunk(Chunk.empty[Request]) ++ ZStream(Request("first"))
+        for {
+          headers <- SafeMetadata.make
+          sent <- ZIO.scoped(Routing.setFirstRequestParams(ZIO.succeed(headers), requests, nameParameter, None).flatMap(_._2.runCollect))
+          values = requestParams(headers)
+        } yield {
+          assertTrue(values == List("name=first")) &&
+          assertTrue(sent == Chunk(Request("first")))
+        }
+      },
+      test("sets nothing for no requests") {
+        for {
+          headers <- SafeMetadata.make
+          sent <- ZIO.scoped(Routing.setFirstRequestParams(ZIO.succeed(headers), ZStream.empty, nameParameter, None).flatMap(_._2.runCollect))
+          values = requestParams(headers)
+        } yield {
+          assertTrue(values.isEmpty) &&
+          assertTrue(sent.isEmpty)
+        }
+      },
+      test("waits for nothing when there are no parameters") {
+        for {
+          pulled <- Ref.make(0)
+          requests = ZStream(Request("first")).tap(_ => pulled.update(_ + 1))
+          headers <- SafeMetadata.make
+          count <- ZIO.scoped(Routing.setFirstRequestParams(ZIO.succeed(headers), requests, Nil, None) *> pulled.get)
+          values = requestParams(headers)
+        } yield {
+          assertTrue(count == 0) &&
+          assertTrue(values.isEmpty)
+        }
+      },
+      test("pulls only the first request before the call starts") {
+        for {
+          pulled <- Ref.make(0)
+          requests = ZStream(Request("first"), Request("second")).rechunk(1).tap(_ => pulled.update(_ + 1))
+          headers <- SafeMetadata.make
+          count <- ZIO.scoped(Routing.setFirstRequestParams(ZIO.succeed(headers), requests, nameParameter, None) *> pulled.get)
+        } yield {
+          assertTrue(count == 1)
+        }
+      },
+      test("fails when pulling the first request fails") {
+        for {
+          headers <- SafeMetadata.make
+          result <- ZIO.scoped(Routing.setFirstRequestParams(ZIO.succeed(headers), ZStream.fail(Status.INTERNAL), nameParameter, None)).either
+        } yield {
+          assertTrue(result.left.toOption.map(_.getCode).contains(Status.Code.INTERNAL))
+        }
+      },
+      test("fails when the first request does not arrive before the deadline, measured in real time") {
+        for {
+          headers <- SafeMetadata.make
+          deadline = Some(Deadline.after(100, TimeUnit.MILLISECONDS))
+          result <- ZIO.scoped(Routing.setFirstRequestParams(ZIO.succeed(headers), ZStream.never, nameParameter, deadline)).either
+        } yield {
+          assertTrue(result.left.toOption.map(_.getCode).contains(Status.Code.DEADLINE_EXCEEDED))
+        }
+      },
+      test("sets the header when the first request arrives before the deadline") {
+        for {
+          headers <- SafeMetadata.make
+          deadline = Some(Deadline.after(1, TimeUnit.MINUTES))
+          sent <- ZIO.scoped(Routing.setFirstRequestParams(ZIO.succeed(headers), ZStream(Request("first")), nameParameter, deadline).flatMap(_._2.runCollect))
+          values = requestParams(headers)
+        } yield {
+          assertTrue(values == List("name=first")) &&
+          assertTrue(sent == Chunk(Request("first")))
+        }
+      },
+      test("fetches the headers after the first request arrives") {
+        for {
+          pulled <- Ref.make(0)
+          requests = ZStream(Request("first")).tap(_ => pulled.update(_ + 1))
+          headers <- SafeMetadata.make
+          fetchedAfter <- Ref.make(-1)
+          fetch = pulled.get.flatMap(fetchedAfter.set) *> ZIO.succeed(headers)
+          _ <- ZIO.scoped(Routing.setFirstRequestParams(fetch, requests, nameParameter, None))
+          count <- fetchedAfter.get
+        } yield {
+          assertTrue(count == 1)
+        }
+      },
+      test("releases the requests when they end, before the scope closes") {
+        for {
+          released <- Ref.make(false)
+          requests = ZStream(Request("first"), Request("second")).ensuring(released.set(true))
+          headers <- SafeMetadata.make
+          releasedBeforeClose <- ZIO.scoped(
+            Routing.setFirstRequestParams(ZIO.succeed(headers), requests, nameParameter, None).flatMap(_._2.runDrain) *>
+              released.get,
+          )
+        } yield {
+          assertTrue(releasedBeforeClose)
+        }
+      },
+      test("releases the requests when the scope closes if they are not run") {
+        for {
+          released <- Ref.make(false)
+          requests = ZStream(Request("first"), Request("second")).ensuring(released.set(true))
+          headers <- SafeMetadata.make
+          _ <- ZIO.scoped(Routing.setFirstRequestParams(ZIO.succeed(headers), requests, nameParameter, None))
+          releasedAfterClose <- released.get
+        } yield {
+          assertTrue(releasedAfterClose)
         }
       },
     ),

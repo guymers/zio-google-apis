@@ -37,24 +37,32 @@ object ClientCalls {
     channel: ZChannel,
     method: MethodDescriptor[Req, Res],
     options: CallOptions,
-    headers: SafeMetadata,
+    headers: ZIO[Any, Status, SafeMetadata],
+    routing: List[Routing.Parameter[Req]],
     req: Req,
-  )(using Trace): ZIO[Any, Error, Res] = ZIO.scoped[Any] {
+  )(using Trace): ZIO[Any, Error, Res] = ZIO.scoped[Any](for {
+    metadata <- headers.handleStatus
+    _ <- Routing.setRequestParams(metadata, req, routing)
+    call <- newCall(channel, method, options)
     // a call that sends exactly one message does not wait for `onReady`
-    newCall(channel, method, options).flatMap { call =>
-      unaryResponseCall(call, headers, _ => call.sendMessage(req))
-    }
-  }
+    response <- unaryResponseCall(call, metadata, _ => call.sendMessage(req))
+  } yield response)
 
   def serverStreaming[Req, Res](
     channel: ZChannel,
     method: MethodDescriptor[Req, Res],
     options: CallOptions,
-    headers: SafeMetadata,
+    headers: ZIO[Any, Status, SafeMetadata],
+    routing: List[Routing.Parameter[Req]],
     req: Req,
   )(using Trace): ZStream[Any, Error, Res] = {
-    ZStream.scoped[Any](newCall(channel, method, options)).flatMap { call =>
-      streamingResponseCall(call, headers, _ => call.sendMessage(req))
+    val start = for {
+      metadata <- headers.handleStatus
+      _ <- Routing.setRequestParams(metadata, req, routing)
+      call <- newCall(channel, method, options)
+    } yield (metadata, call)
+    ZStream.scoped[Any](start).flatMap { (metadata, call) =>
+      streamingResponseCall(call, metadata, _ => call.sendMessage(req))
     }
   }
 
@@ -62,23 +70,29 @@ object ClientCalls {
     channel: ZChannel,
     method: MethodDescriptor[Req, Res],
     options: CallOptions,
-    headers: SafeMetadata,
+    headers: ZIO[Any, Status, SafeMetadata],
+    routing: List[Routing.Parameter[Req]],
     req: ZStream[R, Status, Req],
-  )(using Trace): ZIO[R, Error, Res] = ZIO.scoped[R] {
-    newCall(channel, method, options).flatMap { call =>
-      unaryResponseCall(call, headers, sendAll(call, _, req))
-    }
-  }
+  )(using Trace): ZIO[R, Error, Res] = ZIO.scoped[R](for {
+    (metadata, requests) <- Routing.setFirstRequestParams(headers, req, routing, Option(options.getDeadline)).handleStatus
+    call <- newCall(channel, method, options)
+    response <- unaryResponseCall(call, metadata, sendAll(call, _, requests))
+  } yield response)
 
   def bidirectional[R, Req, Res](
     channel: ZChannel,
     method: MethodDescriptor[Req, Res],
     options: CallOptions,
-    headers: SafeMetadata,
+    headers: ZIO[Any, Status, SafeMetadata],
+    routing: List[Routing.Parameter[Req]],
     req: ZStream[R, Status, Req],
   )(using Trace): ZStream[R, Error, Res] = {
-    ZStream.scoped[R](newCall(channel, method, options)).flatMap { call =>
-      streamingResponseCall(call, headers, sendAll(call, _, req))
+    val start = for {
+      (metadata, requests) <- Routing.setFirstRequestParams(headers, req, routing, Option(options.getDeadline)).handleStatus
+      call <- newCall(channel, method, options)
+    } yield (metadata, requests, call)
+    ZStream.scoped[R](start).flatMap { (metadata, requests, call) =>
+      streamingResponseCall(call, metadata, sendAll(call, _, requests))
     }
   }
 

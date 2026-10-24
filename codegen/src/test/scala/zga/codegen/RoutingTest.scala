@@ -33,7 +33,7 @@ object RoutingTest extends ZIOSpecDefault {
   }
 
   private def parametersOf(file: Descriptors.FileDescriptor) = {
-    Routing.parameters(file.getServices.get(0).getMethods.get(0))
+    Routing.parameters(file.getServices.get(0).getMethods.get(0), Nil)
   }
 
   /** The resolved request fields a routing parameter for `name` carries. */
@@ -328,10 +328,14 @@ object RoutingTest extends ZIOSpecDefault {
         )
         assertTrue(Try(parametersOf(file)).isFailure)
       },
-      test("ignores routing on a client-streaming method") {
+      test("ignores the routing option of a client-streaming method") {
         val file = serviceDescriptor(
           method("StreamThings", clientStreaming = true, routing = Some(routingRule("name" -> Some("{name=*}")))),
         )
+        assertTrue(parametersOf(file).isEmpty)
+      },
+      test("ignores the http path variables of a client-streaming method") {
+        val file = serviceDescriptor(method("StreamThings", clientStreaming = true, http = Some("/v1/{name=things/*}")))
         assertTrue(parametersOf(file).isEmpty)
       },
       // AIP-4222: routing applies to an unary or server-streaming RPC
