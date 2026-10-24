@@ -1,13 +1,22 @@
 package zga.codegen
 
+import com.google.api.RoutingParameter
+
+/**
+ * @param routing
+ *   routing parameters by method full name, for routing the proto does not
+ *   declare; the Google client libraries add these by hand, for example to
+ *   route a client-streaming method on its first message
+ */
 case class ZioGrpcOptions(
   classPrefix: String,
   pkgName: String,
   servicesOnly: Set[String],
+  routing: Map[String, List[RoutingParameter]],
 )
 object ZioGrpcOptions {
 
-  private val SupportedOptions = Set("class_prefix", "pkg_name", "services_only")
+  private val SupportedOptions = Set("class_prefix", "pkg_name", "services_only", "routing")
 
   def fromStr(str: String): Either[String, Option[ZioGrpcOptions]] = {
     if (str.nonEmpty) {
@@ -35,10 +44,35 @@ object ZioGrpcOptions {
               if (files.isEmpty) Left(s"invalid grpc options string: $str, missing services_only")
               else Right(files)
           }
-        } yield Some(apply(classPrefix = classPrefix, pkgName = pkgName, servicesOnly = servicesOnly))
+          routing <- options.get("routing") match {
+            case None => Right(Map.empty[String, List[RoutingParameter]])
+            case Some(value) => parseRouting(value).left.map(err => s"invalid grpc options string: $str, $err")
+          }
+        } yield Some(apply(classPrefix = classPrefix, pkgName = pkgName, servicesOnly = servicesOnly, routing = routing))
       }
     } else {
       Right(None)
+    }
+  }
+
+  /**
+   * Parses `method:field` and `method:field:path_template` entries separated by
+   * `,`, where `method` is the full name of the method.
+   */
+  private def parseRouting(value: String): Either[String, Map[String, List[RoutingParameter]]] = {
+    val entries = value.split(',').iterator.map(_.trim).filter(_.nonEmpty).toList
+    if (entries.isEmpty) {
+      Left("missing routing")
+    } else {
+      val (errors, parameters) = entries.partitionMap { entry =>
+        entry.split(":", 3).toList match {
+          case method :: field :: template if (method :: field :: template).forall(_.nonEmpty) =>
+            Right(method -> RoutingParameter.newBuilder.setField(field).setPathTemplate(template.headOption.getOrElse("")).build)
+          case _ =>
+            Left(s"invalid routing '$entry'")
+        }
+      }
+      errors.headOption.toLeft(parameters.groupMap(_._1)(_._2))
     }
   }
 }

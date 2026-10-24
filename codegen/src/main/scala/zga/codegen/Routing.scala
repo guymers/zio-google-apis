@@ -2,6 +2,7 @@ package zga.codegen
 
 import com.google.api.AnnotationsProto
 import com.google.api.HttpRule
+import com.google.api.RoutingParameter
 import com.google.api.RoutingProto
 import com.google.api.RoutingRule
 import com.google.protobuf.DescriptorProtos
@@ -13,9 +14,10 @@ import scala.annotation.tailrec
 import scala.jdk.CollectionConverters.*
 
 /**
- * Reads a method's routing parameters from the `google.api.routing` option,
- * falling back to the path variables of its `google.api.http` rule when the
- * option is absent.
+ * Reads a method's routing parameters from the `google.api.routing` option and
+ * the `routing` plugin option, falling back to the path variables of its
+ * `google.api.http` rule when both are absent. A client-streaming method is
+ * routed only by the `routing` plugin option.
  *
  * See
  * [[https://google.aip.dev/client-libraries/4222 AIP-4222: Routing headers]]
@@ -45,25 +47,44 @@ object Routing {
   private val RoutingExtension: ExtensionLite[DescriptorProtos.MethodOptions, RoutingRule] = RoutingProto.routing
   private val HttpExtension: ExtensionLite[DescriptorProtos.MethodOptions, HttpRule] = AnnotationsProto.http
 
-  def parameters(method: Descriptors.MethodDescriptor): List[Parameter] = {
-    val parameters = if (method.getOptions.hasExtension(RoutingExtension)) {
-      routingParameters(method)
-    } else httpParameters(method)
-    // Routing is defined in terms of a single request message, which a client-streaming method does not have
-    if (method.isClientStreaming) Nil else parameters
+  def parameters(method: Descriptors.MethodDescriptor, added: List[RoutingParameter]): List[Parameter] = {
+    val hasRoutingOption = method.getOptions.hasExtension(RoutingExtension)
+    if (method.isClientStreaming) {
+      // the declared routing is unused, but its templates must still parse
+      declaredRouting(method).foreach(pathTemplate)
+      added.map(routingParameter(method, _))
+    } else if (hasRoutingOption) {
+      (declaredRouting(method) ++ added).map(routingParameter(method, _))
+    } else if (added.nonEmpty) {
+      val dropped = httpParameters(method).map(_.field).filterNot(added.map(_.getField).contains)
+      if (dropped.nonEmpty) {
+        throw IllegalArgumentException(
+          s"the routing plugin option replaces the google.api.http path variables, so must also route on ${dropped.mkString("'", "', '", "'")}",
+        )
+      }
+      added.map(routingParameter(method, _))
+    } else {
+      httpParameters(method)
+    }
   }.additionalErrorContext(s"${method.getFullName}")
 
-  private def routingParameters(method: Descriptors.MethodDescriptor): List[Parameter] = {
+  private def declaredRouting(method: Descriptors.MethodDescriptor) = {
     val rule: RoutingRule = method.getOptions.getExtension(RoutingExtension)
-    rule.getRoutingParametersList.asScala.toList.map { parameter =>
-      val field = parameter.getField
-      Parameter(
-        field = field,
-        pathTemplate = Option(parameter.getPathTemplate).filter(_.nonEmpty).map(Template.parse),
-        source = Source.Routing,
-        fields = resolveFields(method, field, Source.Routing),
-      )
-    }
+    rule.getRoutingParametersList.asScala.toList
+  }
+
+  private def pathTemplate(parameter: RoutingParameter) = {
+    Option(parameter.getPathTemplate).filter(_.nonEmpty).map(Template.parse)
+  }
+
+  private def routingParameter(method: Descriptors.MethodDescriptor, parameter: RoutingParameter) = {
+    val field = parameter.getField
+    Parameter(
+      field = field,
+      pathTemplate = pathTemplate(parameter),
+      source = Source.Routing,
+      fields = resolveFieldPath(method.getInputType, field, Source.Routing),
+    )
   }
 
   private def httpParameters(method: Descriptors.MethodDescriptor): List[Parameter] = {
@@ -73,7 +94,7 @@ object Routing {
         field = field,
         pathTemplate = None,
         source = Source.Http,
-        fields = resolveFields(method, field, Source.Http),
+        fields = resolveFieldPath(method.getInputType, field, Source.Http),
       )
     }
   }
@@ -126,21 +147,6 @@ object Routing {
 
     loop(path.toList, 0, "", Nil)
   }.additionalErrorContext(s"invalid http path '$path'")
-
-  /**
-   * The fields named by a parameter, resolved against the method's request
-   * message.
-   *
-   * A client-streaming method has no single request message, so its parameters
-   * are discarded, and only the annotation itself is validated.
-   */
-  private def resolveFields(
-    method: Descriptors.MethodDescriptor,
-    field: String,
-    source: Source,
-  ): List[Descriptors.FieldDescriptor] = {
-    if (method.isClientStreaming) Nil else resolveFieldPath(method.getInputType, field, source)
-  }
 
   /**
    * The field the path names, and each message field leading to it, in order.

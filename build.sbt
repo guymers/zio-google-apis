@@ -90,6 +90,16 @@ lazy val root = project.in(file("."))
   // note not including client IT projects so `test` does not consider them
   .disablePlugins(MimaPlugin)
 
+lazy val itTests = project.in(file(".it"))
+  .settings(name := "zio-google-apis-it-tests")
+  .settings(noPublishSettings)
+  .aggregate(
+    cloudRunIT,
+    secretManagerIT,
+    storageIT,
+  )
+  .disablePlugins(MimaPlugin)
+
 lazy val benchmark = project.in(file("benchmark"))
   .settings(moduleName := "zga-benchmark")
   .settings(noPublishSettings)
@@ -227,8 +237,25 @@ lazy val secretManager = client("secret-manager", classPrefix = "SecretManager",
 lazy val secretManagerIT = clientIT("secret-manager")
   .dependsOn(secretManager)
 
-lazy val storage = client("storage", classPrefix = "Storage", pkgName = "storage")
+// Client-streaming methods are routed only by this option. WriteObject and BidiWriteObject have no
+// `google.api.routing` option, but the server requires a routing header, and BidiReadObject repeats its option.
+// The `routing_token` of a redirected BidiReadObject or BidiWriteObject is also sent in the header, which the
+// Java client does in `ObjectReadSessionState` and `BidiUploadState`.
+val storageRouting = Map("routing" -> List(
+  "google.storage.v2.Storage.WriteObject:write_object_spec.resource.bucket:{bucket=**}",
+  "google.storage.v2.Storage.WriteObject:upload_id:{bucket=projects/*/buckets/*}/**", // same as QueryWriteStatus
+  "google.storage.v2.Storage.BidiWriteObject:write_object_spec.resource.bucket:{bucket=**}",
+  "google.storage.v2.Storage.BidiWriteObject:upload_id:{bucket=projects/*/buckets/*}/**",
+  "google.storage.v2.Storage.BidiWriteObject:append_object_spec.bucket:{bucket=**}",
+  "google.storage.v2.Storage.BidiWriteObject:append_object_spec.routing_token:{routing_token=**}",
+  "google.storage.v2.Storage.BidiReadObject:read_object_spec.bucket:{bucket=**}",
+  "google.storage.v2.Storage.BidiReadObject:read_object_spec.routing_token:{routing_token=**}",
+).mkString(","))
+
+lazy val storage = client("storage", classPrefix = "Storage", pkgName = "storage", extraOptions = storageRouting)
   .dependsOn(iam % "compile->compile;protobuf->protobuf")
+lazy val storageIT = clientIT("storage")
+  .dependsOn(storage)
 
 lazy val shared = project.in(file("shared"))
   .settings(moduleName := "zga-shared")
@@ -301,7 +328,8 @@ def protoPlugin(options: Map[String, String]) =
     unmanagedSourceDirectories := (Compile / unmanagedSourceDirectories).value,
   )) ++ Seq(
   ProtobufConfig / version := protobufVersion,
-  ProtobufConfig / protobufProtocOptions ++= {
+  // the cache does not key on `options`, so a changed option would reuse the previous result
+  ProtobufConfig / protobufProtocOptions ++= Def.uncached {
     val plugin = (codegen / codegenProtocPlugin).value
     val out = (Compile / sourceManaged).value
     Seq(

@@ -1,6 +1,14 @@
 package zga.test
 
+import com.google.auth.oauth2.GoogleCredentials
+import io.grpc.netty.NettyChannelBuilder
+import io.netty.channel.ChannelFactory
+import io.netty.channel.EventLoopGroup
+import io.netty.channel.socket.SocketChannel
 import zga.auth.Credentials
+import zga.client.ZChannel
+import zio.Tag
+import zio.ZIO
 import zio.ZLayer
 import zio.test.Annotations
 import zio.test.TestAspect
@@ -19,6 +27,22 @@ object GoogleTestEnvironment {
   }
 
   val credentials = ZLayer.fromZIO(Credentials.defaultGoogleCredentials)
+
+  def channel[A: Tag](builder: => NettyChannelBuilder, wrap: ZChannel => A): ZLayer[GoogleIntegrationTest.Env, Throwable, A] = {
+    ZLayer.scoped(for {
+      eventLoopGroup <- ZIO.service[EventLoopGroup]
+      socketChannelFactory <- ZIO.service[ChannelFactory[SocketChannel]]
+      channel <- ZChannel.create {
+        builder
+          .eventLoopGroup(eventLoopGroup)
+          .channelFactory(socketChannelFactory)
+      }
+    } yield wrap(channel))
+  }
+
+  def authentication[A: Tag](fromGoogle: GoogleCredentials => A): ZLayer[Any, Throwable, A] = {
+    credentials >>> ZLayer.fromZIO(ZIO.serviceWith[GoogleCredentials](fromGoogle))
+  }
 
   val projectId = ZLayer.succeed {
     val id = projectEnvVar.getOrElse(throw new IllegalStateException("ProjectEnv variable not defined"))
