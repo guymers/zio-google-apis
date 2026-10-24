@@ -1,12 +1,15 @@
 package zga.error
 
 import com.google.protobuf.ByteString
+import com.google.protobuf.CodedOutputStream
 import io.grpc.Metadata
 import io.grpc.Status
 import zga.common.MessageCodec
 import zio.Chunk
 import zio.test.ZIOSpecDefault
 import zio.test.assertTrue
+
+import java.io.ByteArrayOutputStream
 
 object RpcStatusTest extends ZIOSpecDefault {
 
@@ -72,13 +75,21 @@ object RpcStatusTest extends ZIOSpecDefault {
     test("keeps a detail that cannot be converted without failing the whole status") {
       // `Long.MaxValue` seconds with a full second of nanos overflows the
       // seconds arithmetic when the delay is converted to a `java.time.Duration`
-      val retryInfo = zga.google.rpc.RetryInfo(
-        retryDelay = Some(zga.google.protobuf.Duration(seconds = Long.MaxValue, nanos = 1000000000)),
-      )
+      val retryInfo = encode { output =>
+        output.writeMessage(
+          1,
+          com.google.protobuf.Duration.newBuilder.setSeconds(Long.MaxValue).setNanos(1_000_000_000).build(),
+        )
+      }
       val status = zga.google.rpc.Status(
         code = 8,
         message = "resource exhausted",
-        details = Chunk(pack("type.googleapis.com/google.rpc.RetryInfo", retryInfo)),
+        details = Chunk(
+          zga.google.protobuf.Any(
+            typeUrl = "type.googleapis.com/google.rpc.RetryInfo",
+            value = ByteString.copyFrom(retryInfo),
+          ),
+        ),
       )
 
       val rpcStatus = RpcStatus.fromTrailers(trailers(status))
@@ -114,6 +125,14 @@ object RpcStatusTest extends ZIOSpecDefault {
 
   private def pack[A](typeUrl: String, value: A)(using messageCodec: MessageCodec[A]) =
     zga.google.protobuf.Any(typeUrl = typeUrl, value = ByteString.copyFrom(messageCodec.toByteArray(value)))
+
+  private def encode(write: CodedOutputStream => Unit): Array[Byte] = {
+    val buffer = new ByteArrayOutputStream()
+    val output = CodedOutputStream.newInstance(buffer)
+    write(output)
+    output.flush()
+    buffer.toByteArray
+  }
 
   private def trailers(status: zga.google.rpc.Status) = {
     val trailers = new Metadata()

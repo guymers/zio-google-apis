@@ -8,6 +8,8 @@ val nettyVersion = "4.2.18.Final"
 val protobufVersion = "4.36.2"
 val zioVersion = "2.1.26"
 
+val googleAdsStubs = "com.google.api-ads" % "google-ads-stubs-v26" % "48.0.0"
+
 organization := "io.github.guymers"
 homepage := Some(uri("https://github.com/guymers/zio-google-apis"))
 licenses := List(License.Apache2)
@@ -105,7 +107,7 @@ lazy val benchmark = project.in(file("benchmark"))
   .settings(noPublishSettings)
   .settings(Seq(
     libraryDependencies ++= Seq(
-      "com.google.api-ads" % "google-ads-stubs-v26" % "48.0.0",
+      googleAdsStubs,
     ),
   ))
   .dependsOn(ads)
@@ -213,6 +215,7 @@ def clientIT(name: String) = itProject(name, directory = Some("clients"))
 val longrunningServicesOnly = Map("services_only" -> "google/longrunning/operations.proto")
 
 lazy val ads = client("ads", classPrefix = "Ads", pkgName = "ads", extraOptions = longrunningServicesOnly)
+  .settings(libraryDependencies += googleAdsStubs % Test)
 
 lazy val analytics = client("analytics", classPrefix = "Analytics", pkgName = "analytics", extraOptions = longrunningServicesOnly)
 
@@ -304,6 +307,7 @@ lazy val commonTest = project.in(file("deps/common-test"))
   .settings(protoPlugin(Map.empty))
   .settings(
     ProtobufConfig / protobufGeneratedTargets += (((ProtobufConfig / javaSource).value, "*.java")),
+    libraryDependencies += "com.google.api.grpc" % "proto-google-common-protos" % googleCommonProtosVersion % Test,
   )
   .enablePlugins(ProtobufPlugin)
   .dependsOn(common)
@@ -364,15 +368,14 @@ def protoPlugin(options: Map[String, String]) =
 Global / excludeLintKeys += ProtobufConfig / javaSource
 
 // common protos used by the clients, shared or tests, add to this when a client needs another
+// Timestamp and Duration are not generated, their java.time codecs are written by hand in common
 lazy val commonProtos = Seq(
   "google/api/launch_stage.proto",
   "google/longrunning/operations.proto",
   "google/protobuf/any.proto",
-  "google/protobuf/duration.proto",
   "google/protobuf/empty.proto",
   "google/protobuf/field_mask.proto",
   "google/protobuf/struct.proto",
-  "google/protobuf/timestamp.proto",
   "google/protobuf/wrappers.proto",
   "google/rpc/error_details.proto",
   "google/rpc/status.proto",
@@ -384,6 +387,7 @@ lazy val commonProtos = Seq(
   "google/type/interval.proto",
   "google/type/latlng.proto",
   "google/type/money.proto",
+  "google/type/month.proto",
   "google/type/phone_number.proto",
   "google/type/postal_address.proto",
   "google/type/timeofday.proto",

@@ -3,6 +3,7 @@ package zga.common
 import com.google.protobuf.ByteString
 import com.google.protobuf.CodedInputStream
 import com.google.protobuf.CodedOutputStream
+import com.google.protobuf.InvalidProtocolBufferException
 import com.google.protobuf.WireFormat
 import com.google.protobuf as pb
 import io.grpc.KnownLength
@@ -27,7 +28,6 @@ import zga.codectest.Sparse
 import zga.codectest.Sparses
 import zga.codectest.Unpacked
 import zga.google.protobuf.BytesValue
-import zga.google.protobuf.Duration
 import zga.google.protobuf.FieldMask
 import zga.google.protobuf.FloatValue
 import zga.google.protobuf.ListValue
@@ -42,6 +42,9 @@ import zio.test.assertTrue
 
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.time.DayOfWeek
+import java.time.Duration
+import java.time.Instant
 import scala.jdk.CollectionConverters.*
 import scala.util.Try
 
@@ -50,7 +53,7 @@ object MessageCodecTest extends ZIOSpecDefault {
   override val spec = suite("MessageCodec")(
     suite("round trips")(
       test("scalar") {
-        val value = Duration(seconds = 42L, nanos = 1)
+        val value = Duration.ofSeconds(42L, 1L)
         assertTrue(roundTrip(value) == value)
       },
       test("float") {
@@ -113,6 +116,88 @@ object MessageCodecTest extends ZIOSpecDefault {
       test("a oneof with no member set") {
         val value = Value(kind = None)
         assertTrue(roundTrip(value) == value)
+      },
+    ),
+    suite("java time types")(
+      test("timestamp") {
+        val values = List(
+          Instant.EPOCH,
+          Instant.ofEpochSecond(42L, 1L),
+          Instant.ofEpochSecond(-1L, 999_999_999L),
+        )
+        assertTrue(values.forall(value => roundTrip(value) == value))
+      },
+      test("duration") {
+        val values = List(
+          Duration.ZERO,
+          Duration.ofSeconds(42L, 1L),
+          Duration.ofMillis(-500L),
+          Duration.ofSeconds(-2L, 250_000_000L),
+        )
+        assertTrue(values.forall(value => roundTrip(value) == value))
+      },
+      test("timestamps match protobuf-java") {
+        val values = List(
+          Instant.EPOCH,
+          Instant.ofEpochSecond(42L, 1L),
+          Instant.ofEpochSecond(-1L, 999_999_999L),
+          Instant.ofEpochSecond(253_402_300_799L, 999_999_999L),
+        )
+        assertTrue(values.forall { value =>
+          val java = pb.Timestamp.newBuilder.setSeconds(value.getEpochSecond).setNanos(value.getNano).build()
+          MessageCodec[Instant].toByteArray(value).sameElements(java.toByteArray) &&
+          MessageCodec[Instant].parseFrom(java.toByteArray) == value
+        })
+      },
+      test("durations match protobuf-java's normalized encoding") {
+        val values = List(
+          Duration.ZERO -> (0L, 0),
+          Duration.ofSeconds(42L, 1L) -> (42L, 1),
+          Duration.ofMillis(-500L) -> (0L, -500_000_000),
+          Duration.ofSeconds(-2L, 250_000_000L) -> (-1L, -750_000_000),
+          Duration.ofSeconds(3L) -> (3L, 0),
+        )
+        assertTrue(values.forall { case (value, (seconds, nanos)) =>
+          val java = pb.Duration.newBuilder.setSeconds(seconds).setNanos(nanos).build()
+          MessageCodec[Duration].toByteArray(value).sameElements(java.toByteArray) &&
+          MessageCodec[Duration].parseFrom(java.toByteArray) == value
+        })
+      },
+      test("reads a non-canonical negative duration as the same duration") {
+        val java = pb.Duration.newBuilder.setSeconds(-1L).setNanos(500_000_000).build()
+        assertTrue(MessageCodec[Duration].parseFrom(java.toByteArray) == Duration.ofMillis(-500L))
+      },
+      test("rejects a duration that java.time.Duration cannot represent as an invalid message") {
+        val java = pb.Duration.newBuilder.setSeconds(Long.MaxValue).setNanos(1_000_000_000).build()
+        assertTrue(isInvalid(Try(MessageCodec[Duration].parseFrom(java.toByteArray))))
+      },
+      test("rejects a timestamp that java.time.Instant cannot represent as an invalid message") {
+        val java = pb.Timestamp.newBuilder.setSeconds(Long.MaxValue).build()
+        assertTrue(isInvalid(Try(MessageCodec[Instant].parseFrom(java.toByteArray))))
+      },
+      test("default values are not written") {
+        assertTrue(MessageCodec[Instant].toByteArray(Instant.EPOCH).isEmpty) &&
+        assertTrue(MessageCodec[Duration].toByteArray(Duration.ZERO).isEmpty)
+      },
+      test("time of day keeps 24:00, which java.time.LocalTime cannot hold") {
+        val value = zga.google.`type`.TimeOfDay(hours = 24)
+        assertTrue(roundTrip(value) == value)
+      },
+      test("day of week") {
+        assertTrue(zga.google.`type`.DayOfWeek.fromValue(1).contains(DayOfWeek.MONDAY)) &&
+        assertTrue(zga.google.`type`.DayOfWeek.fromValue(0).isEmpty) &&
+        assertTrue(zga.google.`type`.DayOfWeek.value(Some(DayOfWeek.SUNDAY)) == 7) &&
+        assertTrue(zga.google.`type`.DayOfWeek.value(None) == 0)
+      },
+      test("date time without an offset stays a local time") {
+        val bytes = encode { out =>
+          out.writeInt32(1, 2024)
+          out.writeInt32(2, 1)
+          out.writeInt32(3, 2)
+          out.writeInt32(4, 3)
+        }
+        val codec = MessageCodec[zga.google.`type`.DateTime]
+        assertTrue(codec.toByteArray(codec.parseFrom(bytes)).sameElements(bytes))
       },
     ),
     suite("matches protobuf-java")(
@@ -344,7 +429,7 @@ object MessageCodecTest extends ZIOSpecDefault {
     suite("presence")(
       test("a field without presence is not written when it holds its default value") {
         assertTrue(MessageCodec[Scalars].toByteArray(Scalars()).isEmpty) &&
-        assertTrue(MessageCodec[Duration].toByteArray(Duration()).isEmpty)
+        assertTrue(MessageCodec[Duration].toByteArray(Duration.ZERO).isEmpty)
       },
       test("negative zero is not a default value") {
         val value = Scalars(floatValue = -0.0f, doubleValue = -0.0d)
@@ -379,7 +464,7 @@ object MessageCodecTest extends ZIOSpecDefault {
           out.writeTag(104, WireFormat.WIRETYPE_END_GROUP)
           out.writeInt32(2, 7)
         }
-        assertTrue(MessageCodec[Duration].parseFrom(bytes) == Duration(seconds = 42L, nanos = 7))
+        assertTrue(MessageCodec[Duration].parseFrom(bytes) == Duration.ofSeconds(42L, 7L))
       },
       test("skips a known field with an unexpected wire type, as protobuf-java does") {
         val bytes = encode { out =>
@@ -387,7 +472,7 @@ object MessageCodecTest extends ZIOSpecDefault {
           out.writeInt32(2, 7)
         }
         assertTrue(pb.Duration.parseFrom(bytes).getSeconds == 0L) &&
-        assertTrue(MessageCodec[Duration].parseFrom(bytes) == Duration(nanos = 7))
+        assertTrue(MessageCodec[Duration].parseFrom(bytes) == Duration.ofNanos(7L))
       },
       test("rejects an end group tag that ends no group") {
         val bytes = encode(_.writeTag(5, WireFormat.WIRETYPE_END_GROUP))
@@ -465,9 +550,9 @@ object MessageCodecTest extends ZIOSpecDefault {
     ),
     suite("repeated occurrences")(
       test("the last value of a scalar field wins") {
-        val bytes = MessageCodec[Duration].toByteArray(Duration(seconds = 1L, nanos = 2)) ++
-          MessageCodec[Duration].toByteArray(Duration(seconds = 3L))
-        assertTrue(MessageCodec[Duration].parseFrom(bytes) == Duration(seconds = 3L, nanos = 2))
+        val bytes = MessageCodec[Duration].toByteArray(Duration.ofSeconds(1L, 2L)) ++
+          MessageCodec[Duration].toByteArray(Duration.ofSeconds(3L))
+        assertTrue(MessageCodec[Duration].parseFrom(bytes) == Duration.ofSeconds(3L, 2L))
       },
       test("a message field merges into the previous value, as protobuf-java does") {
         val first = Proto2Java.Node.newBuilder
@@ -617,7 +702,7 @@ object MessageCodecTest extends ZIOSpecDefault {
     ),
     suite("api")(
       test("grpc marshaller") {
-        val value = Duration(seconds = 42L, nanos = 1)
+        val value = Duration.ofSeconds(42L, 1L)
         val marshaller = MessageCodec.marshaller[Duration]
         val stream = marshaller.stream(value)
         assertTrue(stream.isInstanceOf[KnownLength]) &&
@@ -625,21 +710,26 @@ object MessageCodecTest extends ZIOSpecDefault {
       },
       test("grpc marshaller reads an empty stream as the default value") {
         val marshaller = MessageCodec.marshaller[Duration]
-        assertTrue(marshaller.parse(marshaller.stream(Duration())) == Duration())
+        assertTrue(marshaller.parse(marshaller.stream(Duration.ZERO)) == Duration.ZERO)
       },
       test("grpc marshaller reads a stream of unknown length") {
-        val value = Duration(seconds = 42L, nanos = 1)
+        val value = Duration.ofSeconds(42L, 1L)
         val stream = new ByteArrayInputStream(MessageCodec[Duration].toByteArray(value))
         assertTrue(MessageCodec.marshaller[Duration].parse(stream) == value)
       },
       test("grpc marshaller fails an invalid message with an internal status, as protobuf-java does") {
         val marshaller = MessageCodec.marshaller[Duration]
-        val bytes = MessageCodec[Duration].toByteArray(Duration(seconds = 42L)).dropRight(1)
+        val bytes = MessageCodec[Duration].toByteArray(Duration.ofSeconds(42L)).dropRight(1)
         val result = Try(marshaller.parse(new ByteArrayInputStream(bytes)))
         assertTrue(result.failed.toOption.collect { case e: StatusRuntimeException => e.getStatus.getCode }.contains(Status.Code.INTERNAL))
       },
+      test("grpc marshaller fails a value java.time cannot represent with an internal status") {
+        val bytes = pb.Duration.newBuilder.setSeconds(Long.MaxValue).setNanos(1_000_000_000).build().toByteArray
+        val result = Try(MessageCodec.marshaller[Duration].parse(new ByteArrayInputStream(bytes)))
+        assertTrue(result.failed.toOption.collect { case e: StatusRuntimeException => e.getStatus.getCode }.contains(Status.Code.INTERNAL))
+      },
       test("safely parses a ByteString") {
-        val value = Duration(seconds = 42L, nanos = 1)
+        val value = Duration.ofSeconds(42L, 1L)
         val bytes = ByteString.copyFrom(MessageCodec[Duration].toByteArray(value))
         val truncated = ByteString.copyFrom(Array[Byte](0x0a, 0x05))
         assertTrue(MessageCodec[Duration].safeParseFrom(bytes) == Right(value)) &&
@@ -675,6 +765,8 @@ object MessageCodecTest extends ZIOSpecDefault {
     output.flush()
     buffer.toByteArray
   }
+
+  private def isInvalid(result: Try[?]) = result.failed.toOption.exists(_.isInstanceOf[InvalidProtocolBufferException])
 
   private def roundTrip[A](value: A)(using messageCodec: MessageCodec[A]) = {
     messageCodec.parseFrom(messageCodec.toByteArray(value))

@@ -72,6 +72,176 @@ object GeneratorTest extends ZIOSpecDefault {
         assertTrue(generate(List(stringField())).contains("case class Message("))
       },
     ),
+    suite("java time types")(
+      test("a Timestamp field is an Instant") {
+        val output = generateWellKnownField(
+          field("create_time", 1, FieldDescriptorProto.Type.TYPE_MESSAGE, typeName = Some(".google.protobuf.Timestamp")),
+          "google/protobuf/timestamp.proto",
+          com.google.protobuf.Timestamp.getDescriptor.getFile,
+        )
+        assertTrue(output.contains("  createTime: _root_.scala.Option[_root_.java.time.Instant] = _root_.scala.None,")) &&
+        assertTrue(output.contains("_root_.zga.google.protobuf.Timestamp.messageCodec"))
+      },
+      test("a repeated Timestamp field is a Chunk of Instant") {
+        val output = generateWellKnownField(
+          field(
+            "create_times",
+            1,
+            FieldDescriptorProto.Type.TYPE_MESSAGE,
+            label = Label.LABEL_REPEATED,
+            typeName = Some(".google.protobuf.Timestamp"),
+          ),
+          "google/protobuf/timestamp.proto",
+          com.google.protobuf.Timestamp.getDescriptor.getFile,
+        )
+        assertTrue(output.contains("  createTimes: _root_.zio.Chunk[_root_.java.time.Instant] = _root_.zio.Chunk.empty,"))
+      },
+      test("a Duration field is a Duration") {
+        val output = generateWellKnownField(
+          field("retry_delay", 1, FieldDescriptorProto.Type.TYPE_MESSAGE, typeName = Some(".google.protobuf.Duration")),
+          "google/protobuf/duration.proto",
+          com.google.protobuf.Duration.getDescriptor.getFile,
+        )
+        assertTrue(output.contains("  retryDelay: _root_.scala.Option[_root_.java.time.Duration] = _root_.scala.None,")) &&
+        assertTrue(output.contains("_root_.zga.google.protobuf.Duration.messageCodec"))
+      },
+      test("a Date field is the generated Date, as its components may each be unset") {
+        val output = generateWellKnownField(
+          field("start_date", 1, FieldDescriptorProto.Type.TYPE_MESSAGE, typeName = Some(".google.type.Date")),
+          "google/type/date.proto",
+          com.google.`type`.Date.getDescriptor.getFile,
+        )
+        assertTrue(output.contains("  startDate: _root_.scala.Option[_root_.zga.google.`type`.Date] = _root_.scala.None,")) &&
+        assertTrue(output.contains("_root_.zga.google.`type`.Date.messageCodec"))
+      },
+      test("a TimeOfDay field is the generated TimeOfDay, as LocalTime cannot hold 24:00") {
+        val output = generateWellKnownField(
+          field("start_time", 1, FieldDescriptorProto.Type.TYPE_MESSAGE, typeName = Some(".google.type.TimeOfDay")),
+          "google/type/timeofday.proto",
+          com.google.`type`.TimeOfDay.getDescriptor.getFile,
+        )
+        assertTrue(
+          output.contains("  startTime: _root_.scala.Option[_root_.zga.google.`type`.TimeOfDay] = _root_.scala.None,"),
+        )
+      },
+      test("a DayOfWeek field is an optional java.time.DayOfWeek") {
+        val output = generateWellKnownField(
+          field("day_of_week", 1, FieldDescriptorProto.Type.TYPE_ENUM, typeName = Some(".google.type.DayOfWeek")),
+          "google/type/dayofweek.proto",
+          com.google.`type`.DayOfWeek.getDescriptor.getFile,
+        )
+        assertTrue(output.contains("  dayOfWeek: _root_.scala.Option[_root_.java.time.DayOfWeek] = _root_.scala.None,")) &&
+        assertTrue(output.contains("_root_.zga.google.`type`.DayOfWeek.fromValue(input.readEnum())"))
+      },
+      test("a repeated DayOfWeek field is a Chunk of optional java.time.DayOfWeek") {
+        val output = generateWellKnownField(
+          field(
+            "days_of_week",
+            1,
+            FieldDescriptorProto.Type.TYPE_ENUM,
+            label = Label.LABEL_REPEATED,
+            typeName = Some(".google.type.DayOfWeek"),
+          ),
+          "google/type/dayofweek.proto",
+          com.google.`type`.DayOfWeek.getDescriptor.getFile,
+        )
+        assertTrue(
+          output.contains(
+            "  daysOfWeek: _root_.zio.Chunk[_root_.scala.Option[_root_.java.time.DayOfWeek]] = _root_.zio.Chunk.empty,",
+          ),
+        )
+      },
+      test("a DayOfWeek field with explicit presence is an Option of an optional java.time.DayOfWeek") {
+        val dayOfWeek = field("day_of_week", 1, FieldDescriptorProto.Type.TYPE_ENUM, typeName = Some(".google.type.DayOfWeek"))
+        val proto3Optional = FieldDescriptorProto.newBuilder(dayOfWeek).setProto3Optional(true).setOneofIndex(0).build()
+        val dependency = com.google.`type`.DayOfWeek.getDescriptor.getFile
+        val outputs = List(
+          generateWellKnownField(proto3Optional, "google/type/dayofweek.proto", dependency, List("_day_of_week")),
+          generateWellKnownField(dayOfWeek, "google/type/dayofweek.proto", dependency, syntax = "proto2"),
+        )
+        assertTrue(
+          outputs.forall(
+            _.contains(
+              "  dayOfWeek: _root_.scala.Option[_root_.scala.Option[_root_.java.time.DayOfWeek]] = _root_.scala.None,",
+            ),
+          ),
+        )
+      },
+      test("a DayOfWeek oneof member is optional java.time.DayOfWeek") {
+        val member = FieldDescriptorProto
+          .newBuilder(field("day_of_week", 1, FieldDescriptorProto.Type.TYPE_ENUM, typeName = Some(".google.type.DayOfWeek")))
+          .setOneofIndex(0)
+          .build()
+        val output = generateWellKnownField(
+          member,
+          "google/type/dayofweek.proto",
+          com.google.`type`.DayOfWeek.getDescriptor.getFile,
+          List("schedule"),
+        )
+        assertTrue(output.contains("case class DayOfWeek(value: _root_.scala.Option[_root_.java.time.DayOfWeek])"))
+      },
+      test("a DateTime field is the generated DateTime, as OffsetDateTime cannot hold a local time") {
+        val output = generateWellKnownField(
+          field("create_time", 1, FieldDescriptorProto.Type.TYPE_MESSAGE, typeName = Some(".google.type.DateTime")),
+          "google/type/datetime.proto",
+          com.google.`type`.DateTime.getDescriptor.getFile,
+        )
+        assertTrue(
+          output.contains("  createTime: _root_.scala.Option[_root_.zga.google.`type`.DateTime] = _root_.scala.None,"),
+        )
+      },
+      test("generates Date, TimeOfDay, DateTime and TimeZone as case classes") {
+        val date = Generator.printFile(com.google.`type`.Date.getDescriptor.getFile)
+        val timeOfDay = Generator.printFile(com.google.`type`.TimeOfDay.getDescriptor.getFile)
+        val dateTime = Generator.printFile(com.google.`type`.DateTime.getDescriptor.getFile)
+        assertTrue(date.contains("case class Date")) &&
+        assertTrue(timeOfDay.contains("case class TimeOfDay")) &&
+        assertTrue(dateTime.contains("case class DateTime")) &&
+        assertTrue(dateTime.contains("case class TimeZone"))
+      },
+      test("generates a DayOfWeek codec for java.time.DayOfWeek, not an enum") {
+        val output = Generator.printFile(com.google.`type`.DayOfWeek.getDescriptor.getFile)
+        assertTrue(output.contains("object DayOfWeek {")) &&
+        assertTrue(output.contains("_root_.scala.Option[_root_.java.time.DayOfWeek]")) &&
+        assertTrue(output.contains("case 0 => _root_.scala.None")) &&
+        assertTrue(output.contains("case 1 => _root_.scala.Some(_root_.java.time.DayOfWeek.MONDAY)")) &&
+        assertTrue(output.contains("private val numbers = _root_.scala.Array[_root_.scala.Int](1, 2, 3, 4, 5, 6, 7)")) &&
+        assertTrue(output.contains("case _root_.scala.Some(v) => numbers(v.ordinal)")) &&
+        assertTrue(!output.contains("sealed trait DayOfWeek"))
+      },
+      test("generates a Month codec for java.time.Month, not an enum") {
+        val output = Generator.printFile(com.google.`type`.Month.getDescriptor.getFile)
+        assertTrue(output.contains("object Month {")) &&
+        assertTrue(output.contains("case 12 => _root_.scala.Some(_root_.java.time.Month.DECEMBER)")) &&
+        assertTrue(output.contains("private val numbers = _root_.scala.Array[_root_.scala.Int](1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)")) &&
+        assertTrue(!output.contains("sealed trait Month"))
+      },
+      test("maps an ads enum by name, failing to read its UNKNOWN value or an unrecognized number") {
+        val output = Generator.printFile(adsDayOfWeekFile(DayNames))
+        assertTrue(output.contains("case 2 => _root_.scala.Some(_root_.java.time.DayOfWeek.MONDAY)")) &&
+        assertTrue(output.contains("private val numbers = _root_.scala.Array[_root_.scala.Int](2, 3, 4, 5, 6, 7, 8)")) &&
+        assertTrue(!output.contains("case 1 =>")) &&
+        assertTrue(
+          output.contains(
+            "case _ => throw new _root_.com.google.protobuf.InvalidProtocolBufferException(" +
+              "\"google.ads.googleads.v26.enums.DayOfWeekEnum.DayOfWeek has no _root_.java.time.DayOfWeek value numbered \" + value)",
+          ),
+        )
+      },
+      test("maps an ads enum of any version") {
+        val output = Generator.printFile(adsDayOfWeekFile(DayNames, version = "v27"))
+        assertTrue(output.contains("case 2 => _root_.scala.Some(_root_.java.time.DayOfWeek.MONDAY)")) &&
+        assertTrue(!output.contains("sealed trait DayOfWeek"))
+      },
+      test("rejects a mapped enum that is closed") {
+        val result = Try(Generator.printFile(adsDayOfWeekFile(DayNames, syntax = "proto2")))
+        assertTrue(result.failed.toOption.exists(_.getMessage.contains("is a closed enum")))
+      },
+      test("rejects a mapped enum whose values are not the java.time values") {
+        val result = Try(Generator.printFile(adsDayOfWeekFile(DayNames.filter(_ != "SUNDAY"))))
+        assertTrue(result.failed.toOption.exists(_.getMessage.contains("rather than the _root_.java.time.DayOfWeek values")))
+      },
+    ),
     suite("package mapping")(
       test("generates messages in the remapped package") {
         val output = generate(List(stringField()), javaPackage = Some("com.google.rpc"))
@@ -799,6 +969,24 @@ object GeneratorTest extends ZIOSpecDefault {
     Generator.printFile(messageFile(fields, syntax, pkg, javaPackage))
   }
 
+  private def generateWellKnownField(
+    field: FieldDescriptorProto,
+    dependencyName: String,
+    dependency: Descriptors.FileDescriptor,
+    oneofs: List[String] = Nil,
+    syntax: String = "proto3",
+  ) = {
+    val proto = FileDescriptorProto.newBuilder
+      .setName("test.proto")
+      .setPackage("test")
+      .setSyntax(syntax)
+      .setOptions(FileOptions.newBuilder.setJavaPackage("test"))
+      .addDependency(dependencyName)
+      .addMessageType(messageWithOneofs(List(field), oneofs))
+      .build()
+    Generator.printFile(Descriptors.FileDescriptor.buildFrom(proto, Array(dependency)))
+  }
+
   private def generateCodecFiles(
     fields: List[FieldDescriptorProto],
     pkg: String = "test",
@@ -834,6 +1022,28 @@ object GeneratorTest extends ZIOSpecDefault {
       .addMessageType(message)
       .build()
     Generator.printFile(Descriptors.FileDescriptor.buildFrom(proto, Array.empty))
+  }
+
+  private val DayNames = List("MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY")
+
+  /**
+   * The ads DayOfWeek enum, numbered after its unspecified and unknown values.
+   */
+  private def adsDayOfWeekFile(days: List[String], version: String = "v26", syntax: String = "proto3") = {
+    val values = ("UNSPECIFIED" :: "UNKNOWN" :: days).zipWithIndex.map { case (name, number) =>
+      EnumValueDescriptorProto.newBuilder.setName(name).setNumber(number).build()
+    }
+    val proto = FileDescriptorProto.newBuilder
+      .setName(s"google/ads/googleads/$version/enums/day_of_week.proto")
+      .setPackage(s"google.ads.googleads.$version.enums")
+      .setSyntax(syntax)
+      .addMessageType(
+        DescriptorProto.newBuilder
+          .setName("DayOfWeekEnum")
+          .addEnumType(EnumDescriptorProto.newBuilder.setName("DayOfWeek").addAllValue(values.asJava)),
+      )
+      .build()
+    Descriptors.FileDescriptor.buildFrom(proto, Array.empty)
   }
 
   private def generateOneof(fields: List[FieldDescriptorProto], oneofs: List[String]) = {

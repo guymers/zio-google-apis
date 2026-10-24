@@ -337,13 +337,17 @@ object ZioGrpcGenerator {
    * Formats a non-string routing value as the Google client libraries do. A
    * generated enum case is named after its proto value, so `toString` gives the
    * proto name. An unrecognized value of an open enum has no name, so its
-   * number is sent.
+   * number is sent. A mapped `java.time` enum is named like the proto value,
+   * and `None` is the proto's unspecified value.
    */
   private def formatRoutingValue(field: Descriptors.FieldDescriptor, value: String) = field.getType match {
     case Descriptors.FieldDescriptor.Type.UINT32 | Descriptors.FieldDescriptor.Type.FIXED32 =>
       s"_root_.java.lang.Integer.toUnsignedString($value)"
     case Descriptors.FieldDescriptor.Type.UINT64 | Descriptors.FieldDescriptor.Type.FIXED64 =>
       s"_root_.java.lang.Long.toUnsignedString($value)"
+    case Descriptors.FieldDescriptor.Type.ENUM if JavaEnumType.of(field).nonEmpty =>
+      val unspecified = Utils.escapeScalaString(field.getEnumType.findValueByNumber(0).getName)
+      s"$value.fold($unspecified)(_.toString)"
     case Descriptors.FieldDescriptor.Type.ENUM if !field.getEnumType.isClosed =>
       val enumType = field.getEnumType.scalaType
       s"""($value match {

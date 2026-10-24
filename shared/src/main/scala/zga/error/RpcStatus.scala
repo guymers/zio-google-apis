@@ -189,7 +189,7 @@ object RpcStatus {
 
         case "google.rpc.RetryInfo" =>
           MessageCodec[zga.google.rpc.RetryInfo].safeParseFrom(a.value).map { retryInfo =>
-            RetryInfo(retryInfo.retryDelay.map(duration => Duration.ofSeconds(duration.seconds, duration.nanos.toLong)))
+            RetryInfo(retryInfo.retryDelay)
           }
 
         case _ =>
