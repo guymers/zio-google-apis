@@ -74,7 +74,18 @@ lazy val root = project.in(file("."))
   .settings(noPublishSettings)
   .aggregate(codegen)
   .aggregate(shared, sharedIT, common, commonTest, iam)
-  .aggregate(ads, analytics, cloudErrorReporting, cloudKms, cloudRun, cloudTrace, merchant, secretManager, storage)
+  .aggregate(
+    ads,
+    analytics,
+    cloudErrorReporting,
+    cloudKms,
+    cloudRun,
+    cloudSpanner,
+    cloudTrace,
+    merchant,
+    secretManager,
+    storage,
+  )
   .aggregate(benchmark)
   // note not including client IT projects so `test` does not consider them
   .disablePlugins(MimaPlugin)
@@ -203,6 +214,9 @@ lazy val cloudRun = client("cloud-run", classPrefix = "CloudRun", pkgName = "clo
   .dependsOn(iam % "compile->compile;protobuf->protobuf")
 lazy val cloudRunIT = clientIT("cloud-run")
   .dependsOn(cloudRun)
+
+lazy val cloudSpanner = client("cloud-spanner", classPrefix = "CloudSpanner", pkgName = "cloudspanner", extraOptions = longrunningServicesOnly)
+  .dependsOn(iam % "compile->compile;protobuf->protobuf")
 
 lazy val cloudTrace = client("cloud-trace", classPrefix = "CloudTrace", pkgName = "cloudtrace")
 

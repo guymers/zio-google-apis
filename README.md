@@ -17,6 +17,7 @@ libraryDependencies += "io.github.guymers" %% "<client>" % "<version>"
 - [Cloud Error Reporting](https://docs.cloud.google.com/error-reporting/reference/rest): `zga-cloud-error-reporting`
 - [Cloud Key Management (KMS)](https://docs.cloud.google.com/kms/docs/reference/rpc/google.cloud.kms.v1): `zga-cloud-kms`
 - [Cloud Run](https://docs.cloud.google.com/run/docs/reference/rpc): `zga-cloud-run`
+- [Cloud Spanner](https://docs.cloud.google.com/spanner/docs/reference/rpc): `zga-cloud-spanner`
 - [Cloud Trace](https://docs.cloud.google.com/trace/docs/reference/v2/rpc/google.devtools.cloudtrace.v2): `zga-cloud-trace`
 - [Merchant Center](https://developers.google.com/merchant/api): `zga-merchant`
 - [Secret Manager](https://docs.cloud.google.com/secret-manager/docs/reference/rpc/google.cloud.secretmanager.v1): `zga-secret-manager`

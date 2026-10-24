@@ -17,6 +17,7 @@ Generates Scala 3 case-class messages and ZIO gRPC clients from Google protobuf 
 - **cloud-error-reporting** - generated Cloud Error Reporting client
 - **cloud-kms** - generated Cloud Key Management Service client
 - **cloud-run** - generated Cloud Run client
+- **cloud-spanner** - generated Cloud Spanner client (data, Database Admin and Instance Admin APIs)
 - **cloud-trace** - generated Cloud Trace client
 - **merchant** - generated Merchant Center client (all v1 sub-APIs)
 - **secret-manager** - generated Secret Manager client
