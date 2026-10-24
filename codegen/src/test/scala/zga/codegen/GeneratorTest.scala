@@ -440,6 +440,7 @@ object GeneratorTest extends ZIOSpecDefault {
         assertTrue(output.contains("enum Recognized extends _root_.test.Kind {")) &&
         assertTrue(output.contains("case VALUE\n")) &&
         assertTrue(output.contains("def value: _root_.scala.Int = ordinal")) &&
+        assertTrue(output.contains("def name: _root_.scala.Predef.String = toString")) &&
         assertTrue(output.contains("export Recognized.*")) &&
         assertTrue(output.contains("case class Unrecognized private[Kind] (value: _root_.scala.Int) extends _root_.test.Kind")) &&
         assertTrue(output.contains("def fromValue(v: _root_.scala.Int): _root_.test.Kind = valueMap.getOrElse(v, Unrecognized(v))"))
@@ -449,6 +450,7 @@ object GeneratorTest extends ZIOSpecDefault {
         assertTrue(output.contains("enum Kind derives _root_.scala.CanEqual {")) &&
         assertTrue(output.contains("case VALUE\n")) &&
         assertTrue(output.contains("def value: _root_.scala.Int = ordinal")) &&
+        assertTrue(output.contains("def name: _root_.scala.Predef.String = toString")) &&
         assertTrue(!output.contains("Unrecognized")) &&
         assertTrue(output.contains("def fromValue(v: _root_.scala.Int): _root_.scala.Option[Kind] = valueMap.get(v)"))
       },
@@ -762,7 +764,7 @@ object GeneratorTest extends ZIOSpecDefault {
         assertTrue(Try(generate(List(stringField(label = Label.LABEL_REQUIRED)), syntax = "proto2")).isFailure)
       },
       test("rejects an enum value that collides with a generated member") {
-        val names = List("values", "valueMap", "numbers", "valueOf", "fromOrdinal", "toString", "wait")
+        val names = List("values", "valueMap", "numbers", "valueOf", "fromOrdinal", "name", "toString", "wait")
         assertTrue(names.forall { name =>
           Try(Generator.printFile(Descriptors.FileDescriptor.buildFrom(enumFile(name), Array.empty))).isFailure
         })

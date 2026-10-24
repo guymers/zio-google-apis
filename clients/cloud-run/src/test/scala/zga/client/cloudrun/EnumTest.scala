@@ -40,6 +40,13 @@ object EnumTest extends ZIOSpecDefault {
         "zga.google.cloud.run.Condition.State.fromValue(99) match { case u: zga.google.cloud.run.Condition.State.Unrecognized => u.copy(value = 0) }",
       ))(isLeft)
     },
+    test("names a recognized value after its proto value") {
+      assertTrue(Condition.State.CONDITION_FAILED.name == "CONDITION_FAILED")
+    },
+    test("has no name for a value that may be unrecognized") {
+      assertZIO(typeCheck("zga.google.cloud.run.Condition.State.CONDITION_FAILED.name"))(isRight) &&
+      assertZIO(typeCheck("zga.google.cloud.run.Condition.State.fromValue(3).name"))(isLeft)
+    },
     test("defaults to the zero value") {
       assertTrue(Condition().state == Condition.State.STATE_UNSPECIFIED)
     },
