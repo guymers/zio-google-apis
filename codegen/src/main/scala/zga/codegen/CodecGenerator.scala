@@ -667,7 +667,7 @@ private[codegen] object CodecGenerator {
    */
   private def readValue(f: Descriptors.FieldDescriptor) = f.getType match {
     case Type.MESSAGE => s"${messageCodec(f)}.readDelimited(reader)"
-    case Type.ENUM => s"${f.getEnumType.scalaType}.fromValue(input.readEnum())"
+    case Type.ENUM => s"${f.getEnumType.scalaPath}.fromValue(input.readEnum())"
     case Type.STRING if f.needsUtf8Check => "input.readStringRequireUtf8()"
     case Type.GROUP => throw IllegalArgumentException(s"${f.getFullName} is a group field, which is not supported")
     case _ => s"input.read${scalarName(f)}()"
@@ -675,13 +675,13 @@ private[codegen] object CodecGenerator {
 
   private def writeValue(f: Descriptors.FieldDescriptor, value: String) = f.getType match {
     case Type.MESSAGE => s"${messageCodec(f)}.writeDelimited(output, $value, sizes)"
-    case Type.ENUM => s"output.writeEnumNoTag($value.value)"
+    case Type.ENUM => s"output.writeEnumNoTag(${enumNumber(f, value)})"
     case _ => s"output.write${scalarName(f)}NoTag($value)"
   }
 
   private def valueSize(f: Descriptors.FieldDescriptor, value: String) = f.getType match {
     case Type.MESSAGE => s"${messageCodec(f)}.delimitedSize($value, sizes)"
-    case Type.ENUM => s"$CodedOutput.computeEnumSizeNoTag($value.value)"
+    case Type.ENUM => s"$CodedOutput.computeEnumSizeNoTag(${enumNumber(f, value)})"
     case _ => s"$CodedOutput.compute${scalarName(f)}SizeNoTag($value)"
   }
 
@@ -696,7 +696,16 @@ private[codegen] object CodecGenerator {
     case Type.DOUBLE => s"_root_.java.lang.Double.doubleToRawLongBits($value) != 0L"
     case Type.BOOL => value
     case Type.STRING | Type.BYTES => s"!$value.isEmpty"
-    case Type.ENUM => s"$value.value != 0"
+    case Type.ENUM => s"${enumNumber(f, value)} != 0"
     case Type.MESSAGE | Type.GROUP => throw IllegalArgumentException(s"${f.getFullName} always has presence")
   }
+
+  /**
+   * The number of an enum value. A generated enum has it as its `value`. An
+   * enum mapped to `java.time` is held as an `Option`, which the proto enum's
+   * object converts with its `value` method, `None` becoming the unspecified
+   * number.
+   */
+  private def enumNumber(f: Descriptors.FieldDescriptor, value: String) =
+    JavaEnumType.of(f).fold(s"$value.value")(_ => s"${f.getEnumType.scalaPath}.value($value)")
 }

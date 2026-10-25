@@ -21,6 +21,10 @@ The package comes from `java_package`, falling back to the proto `package`. `goo
 
 A message carries only the fields the `.proto` declares, so a field that a newer server sends and this project does not know about is dropped when the message is encoded again.
 
+A field of type `google.protobuf.Timestamp` is a `java.time.Instant`, and one of type `google.protobuf.Duration` is a `java.time.Duration`. They are not generated: their `MessageCodec`s are written by hand in `common` and convert to and from the protobuf `seconds` and `nanos`; a negative `java.time.Duration` is written in the sign-normalized form that the proto requires. `Date`, `TimeOfDay`, `DateTime` and `TimeZone` stay generated case classes, as `java.time` cannot hold every value they allow: a `Date` with a year, month or day of 0, which protobuf's default values make unavoidable, a `TimeOfDay` of 24:00 or a leap second, or a `DateTime` in local time, without a year, or in a named time zone. 
+
+`DayOfWeek` is a `java.time.DayOfWeek` and `Month` a `java.time.Month`, wrapped in an `Option` because the proto's unspecified value has no counterpart. A number with no `java.time` value fails to read as an `InvalidProtocolBufferException`, as a weekday or month will never be added and a `None` would be written back as the unspecified value. Proto values are matched to `java.time` values by name. Only an open enum can be mapped; codegen fails for a closed one. A mapped enum field with explicit presence (proto3 `optional`) is an `Option` of that `Option`, like any other field with presence, so an unset field is `None` and one set to the unspecified value is `Some(None)`. A value `java.time` cannot represent, such as a `Timestamp` beyond `Instant`'s range, fails to read as an `InvalidProtocolBufferException`, like any other invalid message.
+
 An open enum (proto3, or editions without `enum_type = CLOSED`) keeps numbers it does not know, so a message read from a newer server and written back does not lose the value:
 
 ```scala

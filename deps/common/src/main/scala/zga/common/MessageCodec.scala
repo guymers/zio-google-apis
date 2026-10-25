@@ -39,9 +39,9 @@ abstract class MessageCodec[T] {
   private[zga] def writeTo(output: CodedOutputStream, value: T, sizes: Sizes): Unit
 
   /**
-   * Reads fields up to the end of the input or of the current limit, merging
-   * them into `value` as protobuf does: a scalar replaces the previous value, a
-   * message merges into it, and a repeated or map field appends to it.
+   * Reads fields up to the end of the message being read, merging them into
+   * `value` as protobuf does: a scalar replaces the previous value, a message
+   * merges into it, and a repeated or map field appends to it.
    */
   private[zga] def readFrom(reader: ProtoReader, value: T): T
 
@@ -49,6 +49,10 @@ abstract class MessageCodec[T] {
 }
 
 object MessageCodec {
+
+  given duration: MessageCodec[java.time.Duration] = zga.google.protobuf.Duration.messageCodec
+
+  given instant: MessageCodec[java.time.Instant] = zga.google.protobuf.Timestamp.messageCodec
 
   def apply[T](using codec: MessageCodec[T]): MessageCodec[T] = codec
 
@@ -105,11 +109,7 @@ object MessageCodec {
     override private[zga] def serializedSize(value: T, sizes: Sizes) = 0
     override private[zga] def writeTo(output: CodedOutputStream, value: T, sizes: Sizes) = ()
     override private[zga] def readFrom(reader: ProtoReader, value: T) = {
-      var done = false
-      while (!done) {
-        val tag = reader.input.readTag()
-        done = tag == 0 || !reader.input.skipField(tag)
-      }
+      reader.fields(_ => false)
       value
     }
   }

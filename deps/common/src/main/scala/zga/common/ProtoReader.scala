@@ -33,6 +33,19 @@ private[zga] final class ProtoReader(val input: CodedInputStream) {
   }
 
   /**
+   * Calls `read` with the tag of each field until the end of the message being
+   * read. `read` reads the field's value and returns `true`, or returns `false`
+   * for a field it does not know, which is then skipped.
+   */
+  inline def fields(inline read: Int => Boolean): Unit = {
+    var done = false
+    while (!done) {
+      val tag = input.readTag()
+      done = tag == 0 || !(read(tag) || input.skipField(tag))
+    }
+  }
+
+  /**
    * Reads the elements of a packed repeated field, a length delimited record of
    * values without tags.
    */
@@ -53,13 +66,14 @@ private[zga] final class ProtoReader(val input: CodedInputStream) {
   )(inline put: (K, V) => Unit): Unit = message {
     var key = defaultKey
     var value = defaultValue
-    var done = false
-    while (!done) {
-      val tag = input.readTag()
-      if (tag == 0) done = true
-      else if (tag == keyTag) key = readKey
-      else if (tag == valueTag) value = readValue(value)
-      else done = !input.skipField(tag)
+    fields { tag =>
+      if (tag == keyTag) {
+        key = readKey
+        true
+      } else if (tag == valueTag) {
+        value = readValue(value)
+        true
+      } else false
     }
     put(key, value)
   }
