@@ -102,7 +102,7 @@ object Generator {
 
   private def printEnum(e: Descriptors.EnumDescriptor) = {
     JavaEnumType.of(e) match {
-      case Some(t) => JavaEnumType.printCodec(e, t)
+      case Some(t) => JavaEnumType.printCodec(e, t, enumComment(e))
       case None => if (e.isClosed) printClosedEnum(e) else printOpenEnum(e)
     }
   }

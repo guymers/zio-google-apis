@@ -1,9 +1,12 @@
 package zga.google.protobuf
 
 import com.google.protobuf.CodedOutputStream
+import com.google.protobuf.InvalidProtocolBufferException
 import zga.common.MessageCodec
 import zga.common.ProtoReader
 import zga.common.Sizes
+
+import java.time.DateTimeException
 
 /**
  * The codec of a well-known type of an `int64 seconds = 1` and an
@@ -43,19 +46,29 @@ private[protobuf] abstract class SecondsNanosCodec[T](protoFullName: String) ext
     }
   }
 
+  /**
+   * Reads the fields into a `java.time` value, failing to read the message when
+   * `java.time` cannot represent them, unlike protobuf-java which reads any
+   * seconds and nanos.
+   */
   override private[zga] def readFrom(reader: ProtoReader, value: T): T = {
     val input = reader.input
     var s = seconds(value)
     var n = nanos(value)
-    var done = false
-    while (!done) {
-      input.readTag() match {
-        case 0 => done = true
-        case 8 => s = input.readInt64()
-        case 16 => n = input.readInt32()
-        case tag => done = !input.skipField(tag)
-      }
+    reader.fields {
+      case 8 =>
+        s = input.readInt64()
+        true
+      case 16 =>
+        n = input.readInt32()
+        true
+      case _ => false
     }
-    MessageCodec.javaTime(s"Invalid $protoFullName: seconds=$s nanos=$n")(fromProto(s, n))
+    try {
+      fromProto(s, n)
+    } catch {
+      case e: (DateTimeException | ArithmeticException) =>
+        throw InvalidProtocolBufferException(s"Invalid $protoFullName: seconds=$s nanos=$n", e)
+    }
   }
 }

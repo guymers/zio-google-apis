@@ -2,7 +2,6 @@ package zga.codegen
 
 import com.google.protobuf.Descriptors
 
-import scala.collection.immutable.ListMap
 import scala.jdk.CollectionConverters.*
 
 /**
@@ -46,8 +45,7 @@ private[codegen] object JavaEnumType {
     Option.when(f.getJavaType == Descriptors.FieldDescriptor.JavaType.ENUM)(f.getEnumType).flatMap(of(_))
   }
 
-  def printCodec(e: Descriptors.EnumDescriptor, t: JavaEnumType): String = {
-    val comment = e.comment.map(Comments.formatAsScaladoc(_, ListMap.empty)).getOrElse("")
+  def printCodec(e: Descriptors.EnumDescriptor, t: JavaEnumType, comment: String): String = {
     val mapped = e.getValues.asScala.toList.filter(_.getNumber != 0)
     val mappedNames = mapped.map(_.getName)
     if (mappedNames.sorted != t.javaValues.sorted) {

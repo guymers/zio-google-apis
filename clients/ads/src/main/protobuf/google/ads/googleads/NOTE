@@ -1,4 +1,4 @@
 When updating the symlink to a new version also update:
 - `zga.client.ads.error.AdsError.FailureKey`
-- `googleAdsStubs` in build.sbt
+- the benchmark's `google-ads-stubs-v*` dependency in build.sbt
 - benchmark/src/main/scala/zga/benchmark/SearchGoogleAdsResponseBenchmark.scala

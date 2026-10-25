@@ -11,7 +11,6 @@ import zio.Chunk
 
 import java.io.ByteArrayInputStream
 import java.io.InputStream
-import java.time.DateTimeException
 import scala.util.Try
 
 /**
@@ -40,9 +39,9 @@ abstract class MessageCodec[T] {
   private[zga] def writeTo(output: CodedOutputStream, value: T, sizes: Sizes): Unit
 
   /**
-   * Reads fields up to the end of the input or of the current limit, merging
-   * them into `value` as protobuf does: a scalar replaces the previous value, a
-   * message merges into it, and a repeated or map field appends to it.
+   * Reads fields up to the end of the message being read, merging them into
+   * `value` as protobuf does: a scalar replaces the previous value, a message
+   * merges into it, and a repeated or map field appends to it.
    */
   private[zga] def readFrom(reader: ProtoReader, value: T): T
 
@@ -110,11 +109,7 @@ object MessageCodec {
     override private[zga] def serializedSize(value: T, sizes: Sizes) = 0
     override private[zga] def writeTo(output: CodedOutputStream, value: T, sizes: Sizes) = ()
     override private[zga] def readFrom(reader: ProtoReader, value: T) = {
-      var done = false
-      while (!done) {
-        val tag = reader.input.readTag()
-        done = tag == 0 || !reader.input.skipField(tag)
-      }
+      reader.fields(_ => false)
       value
     }
   }
@@ -171,18 +166,6 @@ object MessageCodec {
       throw RuntimeException(s"size inaccurate: $size != ${size - remaining}")
     }
     buffer
-  }
-
-  /**
-   * Converts the fields read into a `java.time` value, failing to read an
-   * invalid message, as protobuf does, when `java.time` cannot represent them.
-   */
-  private[zga] inline def javaTime[T](inline invalid: String)(inline convert: T): T = {
-    try {
-      convert
-    } catch {
-      case e: (DateTimeException | ArithmeticException) => throw InvalidProtocolBufferException(invalid, e)
-    }
   }
 
   /**
