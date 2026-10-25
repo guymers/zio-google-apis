@@ -2,6 +2,7 @@ package zga.google.protobuf
 
 import com.google.protobuf.CodedOutputStream
 import com.google.protobuf.InvalidProtocolBufferException
+import com.google.protobuf.WireFormat
 import zga.common.MessageCodec
 import zga.common.ProtoReader
 import zga.common.Sizes
@@ -37,19 +38,19 @@ private[protobuf] abstract class SecondsNanosCodec[T](protoFullName: String) ext
     val s = seconds(value)
     val n = nanos(value)
     if (s != 0L) {
-      output.writeTag(1, 0)
+      output.writeTag(1, WireFormat.WIRETYPE_VARINT)
       output.writeInt64NoTag(s)
     }
     if (n != 0) {
-      output.writeTag(2, 0)
+      output.writeTag(2, WireFormat.WIRETYPE_VARINT)
       output.writeInt32NoTag(n)
     }
   }
 
   /**
-   * Reads the fields into a `java.time` value, failing to read the message when
-   * `java.time` cannot represent them, unlike protobuf-java which reads any
-   * seconds and nanos.
+   * Reads any seconds and nanos into a `java.time` value, as protobuf-java
+   * does, normalizing those outside the ranges the proto allows. Fails to read
+   * the message only when `java.time` cannot represent the value.
    */
   override private[zga] def readFrom(reader: ProtoReader, value: T): T = {
     val input = reader.input

@@ -10,8 +10,8 @@ import scala.jdk.CollectionConverters.*
  * The proto enum's unspecified value has no counterpart, so it is represented
  * as `None`.
  *
- * Unrecognized values are an error, all enums that are replaced should never
- * have new values added to them.
+ * An unrecognized number fails to read with `InvalidProtocolBufferException`,
+ * as these enums never gain values.
  */
 private[codegen] enum JavaEnumType(
   val protoFullName: String,

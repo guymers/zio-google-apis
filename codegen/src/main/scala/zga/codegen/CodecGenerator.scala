@@ -25,9 +25,9 @@ private[codegen] object CodecGenerator {
   /**
    * HotSpot never JIT compiles a method of more than 8000 bytes of bytecode
    * (`-XX:HugeMethodLimit`), so the code of a message with many fields is split
-   * across methods, each estimated to be at most 7000. The estimates measured
-   * against the bytecode of the Google Ads messages come out slightly over its
-   * actual size, which leaves room for messages that they fit less well.
+   * across methods, each estimated to be at most 7000. Measured against the
+   * Google Ads messages these estimates come out slightly over the real
+   * bytecode size.
    */
   private val MaxMethodBytes = 7000
 
@@ -47,7 +47,8 @@ private[codegen] object CodecGenerator {
    * @param variableType
    *   the type of the variable
    * @param initial
-   *   the initial value of the variable, of the value being merged into or null
+   *   the initial value of the variable: the leaf's value in the message being
+   *   merged into, or null for a builder
    * @param argument
    *   the constructor argument of the variable
    * @param default
@@ -79,8 +80,9 @@ private[codegen] object CodecGenerator {
    * methods.
    *
    * @param parent
-   *   the type that the object extends, or `None` when the message has no
-   *   fields and its codec is `MessageCodec.empty`
+   *   the type that the object extends, or `None` when the object is not the
+   *   codec: the message has no fields and its codec is `MessageCodec.empty`,
+   *   or the codec is split into an object in a file of its own
    * @param members
    *   the body of the object, which provides the codec as a `given`
    * @param annotation
@@ -257,7 +259,7 @@ private[codegen] object CodecGenerator {
         groupOf.get(leaf).fold(leafCases)(group => leafCases.map(c => c.copy(read = s"_touch_$group(); ${c.read}", bytes = c.bytes + TouchBytes)))
       }
       val parts = Utils.chunkBy(cases, MaxMethodBytes)(_.bytes)
-      val reads = parts.indices.map(i => s"fields.read$i(tag)").mkString(" || ")
+      val reads = parts.indices.map(i => s"read$i(tag)").mkString(" || ")
       val readMethods = parts.zipWithIndex.map { (cases, i) =>
         s"""def read$i(tag: _root_.scala.Int): _root_.scala.Boolean = tag match {
           |${cases.map(c => s"case ${c.tag} =>\n  ${c.read}\n  true").mkString("\n")}
@@ -289,19 +291,11 @@ private[codegen] object CodecGenerator {
           |${copies.mkString("\n")}
           |}""".stripMargin
       }
-      // a proto name cannot start with an underscore, so the class cannot collide with a nested type of the companion,
-      // and a Scala field name has no underscores, so `_copy_N` and `_construct_PartN` cannot collide with a variable
+      // named after the message, as a nested type of the companion may start with an underscore too
+      val fieldsClass = s"_${m.getName}Fields"
       List(
-        s"""$signature = {
-          |  val fields = new _Fields(reader, value)
-          |  var done = false
-          |  while (!done) {
-          |    val tag = reader.input.readTag()
-          |    done = tag == 0 || !($reads || reader.input.skipField(tag))
-          |  }
-          |  fields.result
-          |}""".stripMargin,
-        s"""private final class _Fields(reader: $ProtoReader, value: $scalaType) {
+        s"$signature = new $fieldsClass(reader, value).read()",
+        s"""private final class $fieldsClass(reader: $ProtoReader, value: $scalaType) {
           |  val input = reader.input
           |${declarations.mkString("\n")}
           |${copyMethods.indices.map(i => s"_copy_$i()").mkString("\n")}
@@ -312,7 +306,10 @@ private[codegen] object CodecGenerator {
           |
           |${readMethods.mkString("\n\n")}
           |
-          |  def result: $scalaType = $result
+          |  def read(): $scalaType = {
+          |    reader.fields(tag => $reads)
+          |    $result
+          |  }
           |
           |${constructMethods.mkString("\n\n")}
           |}""".stripMargin,

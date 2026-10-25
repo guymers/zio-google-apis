@@ -11,7 +11,7 @@ private[codegen] object FieldNames {
   def toScalaName(oneof: Descriptors.OneofDescriptor): String = scalaName(oneof.getName)
 
   /**
-   * Convert a proto field name into one that is more appropriate as Scala
+   * Convert a proto field name into one that is more appropriate as a Scala
    * parameter name.
    *
    * Uses the field name with underscores removed and the first character
@@ -54,7 +54,7 @@ private[codegen] object FieldNames {
     builder.toString
   }
 
-  private def isScalaIdentifier(name: String): Boolean = {
+  def isScalaIdentifier(name: String): Boolean = {
     name.headOption.exists(character => character.isLetter || character == '_') &&
     name.forall(character => character.isLetterOrDigit || character == '_')
   }

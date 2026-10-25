@@ -20,13 +20,19 @@ object ZioGrpcOptions {
 
   def fromStr(str: String): Either[String, Option[ZioGrpcOptions]] = {
     if (str.nonEmpty) {
-      val options = str.split(';').filter(_.nonEmpty).map { option =>
-        val parts = option.split('=')
-        parts.headOption.getOrElse("") -> parts.drop(1).mkString("=")
-      }.toMap
+      val pairs = str.split(';').filter(_.nonEmpty).toList.map { option =>
+        option.split("=", 2) match {
+          case Array(key, value) => key -> value
+          case _ => option -> ""
+        }
+      }
+      val options = pairs.toMap
       val unknown = options.keySet.diff(SupportedOptions)
+      val repeated = pairs.groupBy(_._1).collect { case (key, values) if values.sizeIs > 1 => key }.toList
       if (unknown.nonEmpty) {
         Left(s"invalid grpc options string: $str, unknown options: ${unknown.toList.sorted.mkString(", ")}")
+      } else if (repeated.nonEmpty) {
+        Left(s"invalid grpc options string: $str, repeated options: ${repeated.sorted.mkString(", ")}")
       } else {
         for {
           classPrefix <- options

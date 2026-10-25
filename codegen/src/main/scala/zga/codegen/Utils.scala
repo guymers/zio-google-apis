@@ -77,9 +77,10 @@ object Utils {
   }
 
   /**
-   * Maps a proto package (`java_package` when set) into the `zga.google`
-   * namespace to avoid conflicts with Java proto artifacts, without the API
-   * version segment that Google includes in its packages.
+   * Maps a Google proto package (`java_package` when set) into the `zga.google`
+   * namespace to avoid conflicts with Java proto artifacts, dropping the API
+   * version segment and Google Ads' `googleads` segment. Other packages are
+   * unchanged.
    */
   def generatedPackageParts(pkg: String): List[String] = {
     pkg.split('.').filter(_.nonEmpty).toList match {

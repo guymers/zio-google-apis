@@ -719,6 +719,15 @@ object GeneratorTest extends ZIOSpecDefault {
           .build()
         assertTrue(Try(Generator.printFile(Descriptors.FileDescriptor.buildFrom(proto, Array.empty))).isFailure)
       },
+      test("keeps the proto name of a oneof whose Pascal cased name is not an identifier") {
+        val output = generateOneof(List(oneofField("error", 1, 0)), List("_1result"))
+        assertTrue(output.contains("  _1result: _root_.scala.Option[_root_.test.Message._1result] = _root_.scala.None,")) &&
+        assertTrue(output.contains("case class Error(value: _root_.scala.Predef.String) extends _root_.test.Message._1result {"))
+      },
+      test("keeps the proto name of a oneof case whose Pascal cased name is not an identifier") {
+        val output = generateOneof(List(oneofField("_1error", 1, 0)), List("result"))
+        assertTrue(output.contains("case class _1error(value: _root_.scala.Predef.String) extends _root_.test.Message.Result {"))
+      },
     ),
     suite("large messages")(
       test("split the codec's methods, so the JVM can JIT compile them") {
@@ -730,8 +739,9 @@ object GeneratorTest extends ZIOSpecDefault {
         assertTrue(
           output.contains("private def writeTo1(output: _root_.com.google.protobuf.CodedOutputStream, value: _root_.test.Message, @_root_.scala.annotation.unused sizes: _root_.zga.common.Sizes)"),
         ) &&
-        assertTrue(output.contains("done = tag == 0 || !(fields.read0(tag) || fields.read1(tag) || ")) &&
-        assertTrue(output.contains("private final class _Fields(reader: _root_.zga.common.ProtoReader, value: _root_.test.Message) {")) &&
+        assertTrue(output.contains("= new _MessageFields(reader, value).read()")) &&
+        assertTrue(output.contains("reader.fields(tag => read0(tag) || read1(tag) || ")) &&
+        assertTrue(output.contains("private final class _MessageFields(reader: _root_.zga.common.ProtoReader, value: _root_.test.Message) {")) &&
         assertTrue(
           trimmed(output).contains("def read0(tag: _root_.scala.Int): _root_.scala.Boolean = tag match {\ncase 10 =>\n_touch_Part1(); _field1 = input.readStringRequireUtf8()\ntrue\n"),
         )
@@ -739,7 +749,7 @@ object GeneratorTest extends ZIOSpecDefault {
       test("a message with fewer fields keeps each of the codec's methods whole") {
         val fields = (1 to 20).map(index => stringField(name = s"field$index", number = index)).toList
         val output = generate(fields)
-        assertTrue(!output.contains("serializedSize0"), !output.contains("writeTo0"), !output.contains("class _Fields")) &&
+        assertTrue(!output.contains("serializedSize0"), !output.contains("writeTo0"), !output.contains("class _MessageFields")) &&
         assertTrue(
           output.contains("object Message extends _root_.zga.common.MessageCodec[_root_.test.Message] {") &&
           trimmed(output).contains("inline given messageCodec: _root_.zga.common.MessageCodec[_root_.test.Message] = this"),

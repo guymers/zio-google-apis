@@ -39,7 +39,7 @@ object JavaTimePropertyTest extends ZIOSpecDefault {
           assertTrue(MessageCodec[Instant].parseFrom(java) == value)
         }
       },
-      test("reads any seconds and nanos like Instant.ofEpochSecond") {
+      test("reads any seconds and nanos, normalized as Instant.ofEpochSecond does") {
         val seconds = withEdges(Gen.long(Instant.MIN.getEpochSecond, Instant.MAX.getEpochSecond), Long.MinValue, Long.MaxValue)
         check(seconds, anyNanos) { (seconds, nanos) =>
           val java = pb.Timestamp.newBuilder.setSeconds(seconds).setNanos(nanos).build().toByteArray
@@ -56,7 +56,7 @@ object JavaTimePropertyTest extends ZIOSpecDefault {
           assertTrue(MessageCodec[Duration].parseFrom(java) == value)
         }
       },
-      test("reads any seconds and nanos like Duration.ofSeconds") {
+      test("reads any seconds and nanos, normalized as Duration.ofSeconds does") {
         val seconds = withEdges(Gen.long(-MaxDurationSeconds, MaxDurationSeconds), Long.MinValue, Long.MaxValue)
         check(seconds, anyNanos) { (seconds, nanos) =>
           val java = pb.Duration.newBuilder.setSeconds(seconds).setNanos(nanos).build().toByteArray

@@ -14,8 +14,7 @@ import java.io.InputStream
 import scala.util.Try
 
 /**
- * The ability to serialize a message to and from protobuf bytes, implemented by
- * the generated code of each message.
+ * The ability to serialize a message to and from protobuf bytes.
  *
  * A message's codec is usually its companion object, which extends this class
  * and implements the methods that read, write, and size the message's fields,

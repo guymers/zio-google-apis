@@ -61,6 +61,17 @@ object ZioGrpcOptionsTest extends ZIOSpecDefault {
           Left("invalid grpc options string: class_prefix=Test;pkg_name=test;extra=1, unknown options: extra"),
       )
     },
+    test("repeated option") {
+      assertTrue(
+        ZioGrpcOptions.fromStr("class_prefix=Test;pkg_name=test;pkg_name=other") ==
+          Left("invalid grpc options string: class_prefix=Test;pkg_name=test;pkg_name=other, repeated options: pkg_name"),
+      )
+    },
+    test("value containing '='") {
+      assertTrue(
+        ZioGrpcOptions.fromStr("class_prefix=Test;pkg_name=test=").map(_.map(_.pkgName)) == Right(Some("test=")),
+      )
+    },
     test("missing services_only value") {
       assertTrue(
         ZioGrpcOptions.fromStr("class_prefix=Test;pkg_name=test;services_only=") ==

@@ -32,9 +32,8 @@ object ZioGrpcGenerator {
     s"zga/client/${options.pkgName}/${f.protoFileName}.scala"
   }
 
-  def printServiceFile(options: ZioGrpcOptions, f: Descriptors.FileDescriptor): String = {
+  private[codegen] def printServiceFile(options: ZioGrpcOptions, f: Descriptors.FileDescriptor): String = {
     val services = f.getServices.asScala.toList
-    validateServiceNames(f, services)
     val routingParameters = RoutingParameters.parse(f, options.routing)
     s"""${Comments.header(f).map(Comments.formatAsMultiLineComment(_)).getOrElse("")}
       |package zga.client.${options.pkgName}
@@ -43,12 +42,16 @@ object ZioGrpcGenerator {
       |""".stripMargin
   }
 
-  private def validateServiceNames(f: Descriptors.FileDescriptor, services: List[ServiceDescriptor]) = {
-    services.groupBy(clientName).collectFirst {
-      case (name, duplicates) if duplicates.length > 1 => (name, duplicates)
-    }.foreach { case (name, duplicates) =>
-      val protoNames = duplicates.map(_.getName).sorted.mkString("'", "', '", "'")
-      throw IllegalArgumentException(s"${f.getFullName} has services $protoNames, which all map to the generated name '$name'")
+  /**
+   * The clients of every file go into the same `zga.client.<pkg_name>` package,
+   * so no two services of the files being generated can map to the same client
+   * name.
+   */
+  def validateClientNames(files: List[Descriptors.FileDescriptor]): Unit = {
+    files.flatMap(_.getServices.asScala).groupBy(clientName).filter(_._2.length > 1).toList.sortBy(_._1).headOption.foreach {
+      case (name, duplicates) =>
+        val protoNames = duplicates.map(_.getFullName).sorted.mkString("'", "', '", "'")
+        throw IllegalArgumentException(s"services $protoNames all map to the generated name '$name'")
     }
   }
 
@@ -154,11 +157,15 @@ object ZioGrpcGenerator {
     comment.map(Comments.formatAsScaladoc(_, ListMap.empty) + "\n").getOrElse("")
   }
 
-  private def interface(method: MethodDescriptor) = {
-    s"""${scaladoc(method.comment)}def ${methodName(method)}${methodTypeParams(method)}(
+  private def signature(method: MethodDescriptor) = {
+    s"""def ${methodName(method)}${methodTypeParams(method)}(
       |  ${if (method.getInputType.isEmpty) "" else s"request: ${methodInType(method)},"}
       |  deadline: => _root_.scala.Option[$Deadline] = _root_.scala.None
       |)(using $Trace): ${methodOutType(method)}""".stripMargin
+  }
+
+  private def interface(method: MethodDescriptor) = {
+    s"${scaladoc(method.comment)}${signature(method)}"
   }
 
   private def implementation(
@@ -177,10 +184,7 @@ object ZioGrpcGenerator {
     val requestCallArg = if (method.getInputType.isEmpty) method.getInputType.scalaPath else "request"
     val routing =
       if (routingParameters.get(method).isEmpty) "_root_.scala.Nil" else s"$clientName.Grpc.${routingConstantName(method)}"
-    s"""def ${methodName(method)}${methodTypeParams(method)}(
-      |  ${if (method.getInputType.isEmpty) "" else s"request: ${methodInType(method)},"}
-      |  deadline: => _root_.scala.Option[$Deadline] = _root_.scala.None
-      |)(using $Trace): ${methodOutType(method)} = {
+    s"""${signature(method)} = {
       |  val opts = deadline.fold(options)(d => options.withDeadline(d))
       |  $call(channel.channel, $clientName.Grpc.${methodConstant(method)}, opts, $headers, $routing, $requestCallArg)
       |}""".stripMargin
@@ -306,7 +310,7 @@ object ZioGrpcGenerator {
           (s"$current.${Utils.escapeScalaKeyword(field.scalaName)}", field.hasPresence)
         case Some(oneof) =>
           val expression =
-            s"$current.${oneof.scalaName}.collect { case ${oneof.scalaType}.${field.oneofCaseName}(value) => value }"
+            s"$current.${Utils.escapeScalaKeyword(oneof.scalaName)}.collect { case ${oneof.scalaType}.${field.oneofCaseName}(value) => value }"
           (expression, true)
       }
     }

@@ -57,7 +57,7 @@ object Generator {
   }
 
   /**
-   * The file name and content of when a codec is defined in a separate file to
+   * The file name and content of each codec split into a file of its own, to
    * keep the file of its message smaller.
    */
   def codecFiles(f: Descriptors.FileDescriptor): List[(String, String)] = {

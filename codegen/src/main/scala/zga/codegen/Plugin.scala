@@ -77,6 +77,7 @@ object Plugin {
     val servicesOnly = zioGrpcOptions.fold(Set.empty[String])(_.servicesOnly)
     validateServicesOnly(servicesOnly, filesToGenerate)
     validateRouting(zioGrpcOptions.fold(Set.empty[String])(_.routing.keySet), filesToGenerate)
+    if (zioGrpcOptions.nonEmpty) ZioGrpcGenerator.validateClientNames(filesToGenerate.map(_._2))
 
     filesToGenerate.foreach { (fileName, f) =>
       if (!servicesOnly.contains(fileName)) {

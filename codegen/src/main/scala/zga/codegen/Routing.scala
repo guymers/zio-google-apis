@@ -214,7 +214,7 @@ object Routing {
     private[codegen] def parse(template: String): Template = {
       // AIP-4222: the last symbol in a path_template may be the delimiter, and is ignored
       val normalized = if (template.endsWith("/")) template.dropRight(1) else template
-      val segments = splitSegments(normalized).map(Segment.parse(_, template)) match {
+      val segments = splitSegments(normalized).map(Segment.parse) match {
         case Nil => throw IllegalArgumentException(s"no segments")
         case head :: tail => scala.collection.immutable.::(head, tail)
       }
@@ -279,10 +279,9 @@ object Routing {
     private val ComplexResourceId = """^\{[^{}]*\}[_\-\.~]\{[^{}]*\}(?:[_\-\.~]\{[^{}]*\})*$""".r
 
     /**
-     * Parses one `/`-delimited segment of a `path_template`. `template` is the
-     * whole template, used to report where an invalid segment came from.
+     * Parses one `/`-delimited segment of a `path_template`.
      */
-    private[codegen] def parse(segment: String, template: String): Segment = (segment match {
+    private[codegen] def parse(segment: String): Segment = segment match {
       case ComplexResourceId() =>
         throw IllegalArgumentException(s"'$segment' is a complex resource ID path segment")
       case "*" =>
@@ -300,7 +299,7 @@ object Routing {
           if (pattern.isEmpty) {
             throw IllegalArgumentException(s"'{$name=}' has an empty pattern")
           } else {
-            Variable(name, pattern.map(parse(_, template)))
+            Variable(name, pattern.map(parse))
           }
         }
       case literal if literal.contains('{') || literal.contains('}') =>
@@ -312,7 +311,7 @@ object Routing {
         } else {
           Literal(literal)
         }
-    }).additionalErrorContext(s"invalid path template '$template'")
+    }
 
     private def variableName(name: String) = Variable.Name.create(name).getOrElse {
       throw IllegalArgumentException(s"'$name' is not a variable name")
@@ -372,7 +371,7 @@ object Routing {
     }
 
     loop(template.toList, 0, "", Nil)
-  }.additionalErrorContext(s"invalid path template '$template'")
+  }
 
   extension [V](v: => V) {
     private def additionalErrorContext(prefix: String): V = try {
