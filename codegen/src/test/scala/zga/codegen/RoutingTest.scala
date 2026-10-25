@@ -154,6 +154,12 @@ object RoutingTest extends ZIOSpecDefault {
         assertTrue(Try(Routing.Template.parse("projects/{a}_{b}")).isFailure) &&
         assertTrue(Try(Routing.Template.parse("{a}.{b}")).isFailure)
       },
+      test("names the template once in an error") {
+        val emptySegment = Try(Routing.Template.parse("a//b")).failed.toOption.map(_.getMessage)
+        val nestedLiteral = Try(Routing.Template.parse("{name=a*b}")).failed.toOption.map(_.getMessage)
+        assertTrue(emptySegment.contains("invalid path template 'a//b': empty segment")) &&
+        assertTrue(nestedLiteral.contains("invalid path template '{name=a*b}': literal segment 'a*b' contains a reserved character"))
+      },
     ),
     suite("Variable.Name.create")(
       // AIP-4222: a variable name is a field path, so letters, digits, `_` and `.`

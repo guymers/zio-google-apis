@@ -152,6 +152,10 @@ object MessageCodecTest extends ZIOSpecDefault {
             timestampMatchesJava(Instant.ofEpochSecond(253_402_300_799L, 999_999_999L))
           } :: Nil
         }),
+        test("reads a timestamp with negative nanos as their sum") {
+          val java = pb.Timestamp.newBuilder.setSeconds(1L).setNanos(-1).build()
+          assertTrue(MessageCodec[Instant].parseFrom(java.toByteArray) == Instant.ofEpochSecond(0L, 999_999_999L))
+        },
         test("rejects a timestamp that java.time.Instant cannot represent as an invalid message") {
           val java = pb.Timestamp.newBuilder.setSeconds(Long.MaxValue).build()
           assertTrue(isInvalid(Try(MessageCodec[Instant].parseFrom(java.toByteArray))))
@@ -197,7 +201,7 @@ object MessageCodecTest extends ZIOSpecDefault {
             durationMatchesJava(Duration.ofSeconds(3L), 3L, 0)
           } :: Nil
         }),
-        test("reads a non-canonical negative duration as the same duration") {
+        test("reads a duration whose seconds and nanos differ in sign as their sum") {
           val java = pb.Duration.newBuilder.setSeconds(-1L).setNanos(500_000_000).build()
           assertTrue(MessageCodec[Duration].parseFrom(java.toByteArray) == Duration.ofMillis(-500L))
         },

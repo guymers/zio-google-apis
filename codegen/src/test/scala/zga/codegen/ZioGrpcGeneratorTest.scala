@@ -67,9 +67,27 @@ object ZioGrpcGeneratorTest extends ZIOSpecDefault {
     suite("name collisions")(
       test("rejects services that map to the same client name") {
         val file = serviceDescriptor(List("Thing", "ThingService"), method("GetThing"))
-        val error = Try(ZioGrpcGenerator.printServiceFile(options, file)).failed.toOption
+        val error = Try(ZioGrpcGenerator.validateClientNames(List(file))).failed.toOption
         assertTrue(error.exists(_.getMessage.contains("all map to the generated name 'ThingClient'"))) &&
-        assertTrue(error.exists(t => t.getMessage.contains("'Thing'") && t.getMessage.contains("'ThingService'")))
+        assertTrue(error.exists(t => t.getMessage.contains("'test.Thing'") && t.getMessage.contains("'test.ThingService'")))
+      },
+      test("rejects services of different protos that map to the same client name") {
+        def protoFile(name: String, serviceName: String) = {
+          val proto = serviceDescriptor(List(serviceName), method("GetThing"))
+          proto.toProto.toBuilder.setName(name).build()
+        }
+        val request = PluginProtos.CodeGeneratorRequest.newBuilder
+          .addFileToGenerate("a/service.proto")
+          .addFileToGenerate("b/other.proto")
+          .addProtoFile(protoFile("a/service.proto", "Thing"))
+          .addProtoFile(protoFile("b/other.proto", "ThingService"))
+          .setParameter("class_prefix=Test;pkg_name=test")
+          .build()
+
+        val error = Try(Plugin.generateRequest(request)).failed.toOption
+
+        assertTrue(error.exists(_.getMessage.contains("all map to the generated name 'ThingClient'"))) &&
+        assertTrue(error.exists(t => t.getMessage.contains("'test.Thing'") && t.getMessage.contains("'test.ThingService'")))
       },
       test("rejects methods that map to the same constant name") {
         val file = serviceDescriptor(method("GetThing"), method("Get_Thing"))
@@ -78,15 +96,15 @@ object ZioGrpcGeneratorTest extends ZIOSpecDefault {
         assertTrue(error.exists(t => t.getMessage.contains("'GetThing'") && t.getMessage.contains("'Get_Thing'")))
       },
       test("rejects two protos that generate the same output file") {
-        def protoFile(name: String) = {
-          val proto = fileDescriptor(List(method("GetThing")), withService = true)
+        def protoFile(name: String, serviceName: String) = {
+          val proto = serviceDescriptor(List(serviceName), method("GetThing"))
           proto.toProto.toBuilder.setName(name).build()
         }
         val request = PluginProtos.CodeGeneratorRequest.newBuilder
           .addFileToGenerate("a/service.proto")
           .addFileToGenerate("b/service.proto")
-          .addProtoFile(protoFile("a/service.proto"))
-          .addProtoFile(protoFile("b/service.proto"))
+          .addProtoFile(protoFile("a/service.proto", "Thing"))
+          .addProtoFile(protoFile("b/service.proto", "Widget"))
           .setParameter("class_prefix=Test;pkg_name=test")
           .build()
 
@@ -97,7 +115,7 @@ object ZioGrpcGeneratorTest extends ZIOSpecDefault {
       },
       test("accepts a file whose services have distinct names") {
         val file = serviceDescriptor(List("Thing", "Widget"), method("GetThing"))
-        assertTrue(Try(ZioGrpcGenerator.printServiceFile(options, file)).isSuccess)
+        assertTrue(Try(ZioGrpcGenerator.validateClientNames(List(file))).isSuccess)
       },
     ),
     suite("comments")(
@@ -152,6 +170,12 @@ object ZioGrpcGeneratorTest extends ZIOSpecDefault {
         val file = serviceDescriptor(method("GetThing", http = Some("/v1/{tag}")))
         val output = ZioGrpcGenerator.printServiceFile(options, file)
         assertTrue(output.contains("request.selector.collect"))
+      },
+      test("escapes a keyword oneof name") {
+        val proto = serviceDescriptor(method("GetThing", routing = Some(routingRule("tag" -> None)))).toProto.toBuilder
+        proto.getMessageTypeBuilderList.asScala.filter(_.getName == "Request").foreach(_.getOneofDeclBuilder(0).setName("type"))
+        val output = ZioGrpcGenerator.printServiceFile(options, Descriptors.FileDescriptor.buildFrom(proto.build(), Array.empty))
+        assertTrue(output.contains("request.`type`.collect"))
       },
       test("falls back to the http path variables") {
         val file = serviceDescriptor(method("GetThing", http = Some("/v1/{item.name=things/*}:get")))

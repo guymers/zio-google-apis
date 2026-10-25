@@ -52,8 +52,8 @@ extension (d: Descriptors.Descriptor) {
   def parent: Option[Descriptors.Descriptor] = Option(d.getContainingType)
 
   /**
-   * True when the message has no fields, and therefore should not generate a
-   * class.
+   * True when the message has no fields, so it is generated as an object rather
+   * than a case class.
    */
   def isEmpty: Boolean = d.getFields.isEmpty
 
@@ -110,7 +110,7 @@ extension (f: Descriptors.FieldDescriptor) {
    * The name of the generated oneof case class for this field, which is only
    * meaningful when the field belongs to a oneof.
    */
-  def oneofCaseName: String = Utils.escapeScalaKeyword(Utils.pascalCase(f.getName))
+  def oneofCaseName: String = typeName(f.getName)
 
   def scalaType: String = f.getJavaType match {
     case Descriptors.FieldDescriptor.JavaType.INT => "_root_.scala.Int"
@@ -183,15 +183,15 @@ extension (o: Descriptors.OneofDescriptor) {
 
   def scalaName: String = FieldNames.toScalaName(o)
 
-  def scalaTypeName: String = Utils.escapeScalaKeyword(Utils.pascalCase(o.getName))
+  def scalaTypeName: String = typeName(o.getName)
 
   def scalaType: String = o.getContainingType.scalaPath + s".$scalaTypeName"
 
   /**
    * A oneof is required when every member that is not deprecated is marked
    * required, which is how Google APIs mark a oneof that must be set: a oneof
-   * is never `required` in protobuf itself, and has no options of its own, so
-   * the annotation can only live on its members.
+   * is never `required` in protobuf itself, and `google.api.field_behavior` is
+   * a field option, so the annotation can only live on its members.
    */
   def isMarkedRequired: Boolean = {
     val members = o.getFields.asScala.filterNot(_.getOptions.getDeprecated)
@@ -201,6 +201,15 @@ extension (o: Descriptors.OneofDescriptor) {
   def sourcePath: Seq[Int] = {
     o.getContainingType.sourcePath ++ Seq(DescriptorProto.ONEOF_DECL_FIELD_NUMBER, o.getIndex)
   }
+}
+
+/**
+ * The Pascal cased name of a generated type, keeping the proto name when that
+ * is not a Scala identifier, as `_1foo` becomes `1foo`.
+ */
+private def typeName(protoName: String): String = {
+  val name = Utils.pascalCase(protoName)
+  Utils.escapeScalaKeyword(if (FieldNames.isScalaIdentifier(name)) name else protoName)
 }
 
 extension (e: Descriptors.EnumDescriptor) {

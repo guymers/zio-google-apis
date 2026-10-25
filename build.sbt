@@ -368,6 +368,7 @@ def protoPlugin(options: Map[String, String]) =
 Global / excludeLintKeys += ProtobufConfig / javaSource
 
 // common protos used by the clients, shared or tests, add to this when a client needs another
+// month.proto is included alongside dayofweek.proto, so both java.time enum mappings are generated
 // Timestamp and Duration are not generated, their java.time codecs are written by hand in common
 lazy val commonProtos = Seq(
   "google/api/launch_stage.proto",
