@@ -6,7 +6,6 @@ import io.grpc.Status
 import zio.Chunk
 import zio.Clock
 import zio.Duration
-import zio.Exit
 import zio.Scope
 import zio.Trace
 import zio.ZIO
@@ -66,7 +65,8 @@ object Routing {
    * that credentials are not held during the wait. gRPC cannot enforce
    * `deadline` on a call that has not been made yet, so this wait enforces it
    * instead, in real time as gRPC does: if the first request has not arrived by
-   * then, it fails with `DEADLINE_EXCEEDED`.
+   * then, it fails with `DEADLINE_EXCEEDED`. In an uninterruptible region,
+   * `requests` is not interrupted, so it fails once the first request arrives.
    *
    * The returned stream matches `requests`. Its resources are released when it
    * ends, or when the enclosing scope closes if it is not run to the end.
@@ -86,7 +86,8 @@ object Routing {
         pull <- scope.extend[R](requests.toPull)
         first <- deadline match {
           case None => firstChunk(pull)
-          case Some(d) => firstChunk(pull).raceFirst(deadlineExceeded(d))
+          // the race inherits an uninterruptible region, in which only the sleep may be interrupted
+          case Some(d) => firstChunk(pull).raceFirst(deadlineExceeded(d).interruptible)
         }
         metadata <- headers
         _ <- first.flatMap(_.headOption).fold(ZIO.unit)(setRequestParams(metadata, _, parameters))
@@ -95,7 +96,8 @@ object Routing {
           case None => ZStream.empty
           case Some(chunk) => ZStream.fromChunk(chunk) ++ ZStream.repeatZIOChunkOption(pull)
         }
-        metadata -> stream.ensuring(scope.close(Exit.unit))
+        // released with how the stream ended, failed or interrupted as well as done
+        metadata -> stream.ensuringWith(scope.close(_))
       }
     }
   }

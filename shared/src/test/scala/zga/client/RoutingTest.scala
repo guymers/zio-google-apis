@@ -3,6 +3,8 @@ package zga.client
 import io.grpc.Deadline
 import io.grpc.Status
 import zio.Chunk
+import zio.Exit
+import zio.Promise
 import zio.Ref
 import zio.ZIO
 import zio.durationInt
@@ -297,6 +299,32 @@ object RoutingTest extends ZIOSpecDefault {
           assertTrue(sent == Chunk(Request("first")))
         }
       },
+      test("stops waiting for the deadline when the first request arrives in an uninterruptible region") {
+        for {
+          headers <- SafeMetadata.make
+          deadline = Some(Deadline.after(1, TimeUnit.MINUTES))
+          exit <- runUninterruptible {
+            ZIO.scoped(Routing.setFirstRequestParams(ZIO.succeed(headers), ZStream(Request("first")), nameParameter, deadline).flatMap(_._2.runCollect))
+          }
+          values = requestParams(headers)
+        } yield {
+          assertTrue(exit == Exit.succeed(Chunk(Request("first")))) &&
+          assertTrue(values == List("name=first"))
+        }
+      },
+      test("does not interrupt the requests when the deadline passes in an uninterruptible region") {
+        for {
+          arrived <- Ref.make(false)
+          requests = ZStream.fromZIO(ZIO.sleep(500.millis) *> arrived.set(true).as(Request("first")))
+          headers <- SafeMetadata.make
+          deadline = Some(Deadline.after(100, TimeUnit.MILLISECONDS))
+          exit <- runUninterruptible(ZIO.scoped(Routing.setFirstRequestParams(ZIO.succeed(headers), requests, nameParameter, deadline)))
+          requestArrived <- arrived.get
+        } yield {
+          assertTrue(exit.causeOption.flatMap(_.failureOption).map(_.getCode).contains(Status.Code.DEADLINE_EXCEEDED)) &&
+          assertTrue(requestArrived)
+        }
+      },
       test("fetches the headers after the first request arrives") {
         for {
           pulled <- Ref.make(0)
@@ -334,8 +362,53 @@ object RoutingTest extends ZIOSpecDefault {
           assertTrue(releasedAfterClose)
         }
       },
+      test("releases the requests with their own failure") {
+        for {
+          released <- Promise.make[Nothing, Exit[Any, Any]]
+          requests = releasedWith(released, ZStream(Request("first")) ++ ZStream.fail(Status.ABORTED))
+          headers <- SafeMetadata.make
+          _ <- ZIO.scoped(Routing.setFirstRequestParams(ZIO.succeed(headers), requests, nameParameter, None).flatMap(_._2.runDrain)).exit
+          exit <- released.await
+        } yield {
+          assertTrue(exit.causeOption.flatMap(_.failureOption).contains(Status.ABORTED))
+        }
+      },
+      test("releases the requests with the failure of whatever runs them") {
+        for {
+          released <- Promise.make[Nothing, Exit[Any, Any]]
+          requests = releasedWith(released, ZStream(Request("first"), Request("second")))
+          headers <- SafeMetadata.make
+          _ <- ZIO.scoped {
+            Routing.setFirstRequestParams(ZIO.succeed(headers), requests, nameParameter, None).flatMap(_._2.runForeach(_ => ZIO.fail(Status.INTERNAL)))
+          }.exit
+          exit <- released.await
+        } yield {
+          assertTrue(exit.causeOption.flatMap(_.failureOption).contains(Status.INTERNAL))
+        }
+      },
+      test("releases the requests as interrupted when whatever runs them is interrupted") {
+        for {
+          released <- Promise.make[Nothing, Exit[Any, Any]]
+          requests = releasedWith(released, ZStream(Request("first"), Request("second")))
+          headers <- SafeMetadata.make
+          running <- Promise.make[Nothing, Unit]
+          fiber <- ZIO.scoped {
+            Routing.setFirstRequestParams(ZIO.succeed(headers), requests, nameParameter, None).flatMap(_._2.runForeach(_ => running.succeed(()) *> ZIO.never))
+          }.fork
+          _ <- running.await
+          _ <- fiber.interrupt
+          exit <- released.await
+        } yield {
+          assertTrue(exit.isInterrupted)
+        }
+      },
     ),
   ) @@ TestAspect.timeout(15.seconds)
+
+  // `requests` that complete `released` with the exit they are released with
+  private def releasedWith[A](released: Promise[Nothing, Exit[Any, Any]], requests: ZStream[Any, Status, A]) = {
+    ZStream.acquireReleaseExitWith(ZIO.unit)((_, exit) => released.succeed(exit)) *> requests
+  }
 
   private def requestParams(headers: SafeMetadata) = {
     Option(headers.metadata.getAll(Routing.RequestParamsKey)).fold(List.empty[String])(_.asScala.toList)

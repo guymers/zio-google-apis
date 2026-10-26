@@ -26,11 +26,14 @@ class StreamingClientCallListener[Res] private[client] (
 
   override def onMessage(message: Res) = offer(Take.single(message))
 
-  override def onClose(status: Status, trailers: Metadata) = offer {
-    if (status.isOk) {
-      Take.end
-    } else {
-      Take.failCause(Error.fromStatusAndTrailers(status, trailers))
+  override def onClose(status: Status, trailers: Metadata) = {
+    ready.close()
+    offer {
+      if (status.isOk) {
+        Take.end
+      } else {
+        Take.failCause(Error.fromStatusAndTrailers(status, trailers))
+      }
     }
   }
 
@@ -50,7 +53,12 @@ class StreamingClientCallListener[Res] private[client] (
 
   override def onReady() = ready.signal()
 
-  def stream(using Trace): ZStream[Any, Error, Res] = ZStream.fromQueueWithShutdown(queue).flattenTake
+  // Waiting for a response is interruptible even in an uninterruptible region,
+  // so that the stream stops when sending fails or the responses are no
+  // longer consumed, rather than waiting for the server's next response.
+  def stream(using Trace): ZStream[Any, Error, Res] = {
+    ZStream.repeatZIOChunkOption(queue.take.interruptible.flatMap(_.done)).ensuring(queue.shutdown)
+  }
 
 }
 

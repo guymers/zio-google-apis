@@ -5,6 +5,7 @@ import io.grpc.MethodDescriptor
 import io.grpc.Status
 import zga.error.Error
 import zga.error.syntax.*
+import zio.Chunk
 import zio.Scope
 import zio.Trace
 import zio.ZIO
@@ -96,12 +97,32 @@ object ClientCalls {
     }
   }
 
+  // Stops pulling the requests once the call has closed, as nothing more can be
+  // sent. Sending runs in a fiber of its own, so waiting to send is
+  // interruptible even in an uninterruptible region, letting the call stop
+  // sending at the next request without interrupting the requests themselves.
+  // The requests are pulled rather than run, as running a stream runs it in
+  // another fiber, which interrupting this one would not reach.
   private def sendAll[R, Req](
     call: ZClientCall[Req, ?],
     ready: ReadySignal,
     req: ZStream[R, Status, Req],
-  )(using Trace): ZIO[R, Status, Unit] = {
-    req.foreach(message => ready.awaitReady(call) *> call.sendMessage(message))
+  )(using Trace): ZIO[R, Status, Unit] = ZIO.scoped[R] {
+    req.toPull.flatMap { pull =>
+      def send(messages: Chunk[Req]) = {
+        ZIO.forall(messages)(message => ready.awaitReady(call).interruptible.tap(ZIO.when(_)(call.sendMessage(message))))
+      }
+      def loop: ZIO[R, Status, Unit] = pull.foldZIO(
+        _.fold(ZIO.unit)(ZIO.fail(_)),
+        messages => send(messages).flatMap(open => if (open) loop else ZIO.unit),
+      )
+      loop
+    }
+  }
+
+  // a closed call has nothing to half-close, and gRPC rejects it once the call is cancelled
+  private def halfClose(call: ZClientCall[?, ?], ready: ReadySignal)(using Trace): ZIO[Any, Status, Unit] = {
+    ZIO.unlessZIODiscard(ready.isClosed)(call.halfClose())
   }
 
   private def unaryResponseCall[R, Req, Res](
@@ -117,10 +138,14 @@ object ClientCalls {
         // able to deliver it, letting the listener reject the protocol error
         call.request(2) *>
         sendMessages(ready) *>
-        call.halfClose()
-    result = listener.result.map(_._2)
+        halfClose(call, ready)
+    // interruptible even in an uninterruptible region, so that a failure to
+    // send does not wait for a result that the server is yet to send
+    result = listener.result.map(_._2).interruptible
     // the server can close the call before every request is sent, for
-    // example to reject it, so sending stops as soon as there is a result
+    // example to reject it, so sending stops as soon as there is a result:
+    // it is interrupted, or in an uninterruptible region, where the requests
+    // must not be interrupted, it stops at the next request
     response <- (send.handleStatus *> result).raceFirst(result)
   } yield response
 
@@ -135,7 +160,7 @@ object ClientCalls {
           call.start(listener, headers) *>
             call.request(1) *>
             sendMessages(ready) *>
-            call.halfClose()
+            halfClose(call, ready)
 
         // the responses end when the server closes the call, even if requests are still being sent
         ZStream

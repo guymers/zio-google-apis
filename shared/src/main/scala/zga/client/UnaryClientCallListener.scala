@@ -51,35 +51,39 @@ class UnaryClientCallListener[Res] private[client] (
 
   // The call is cancelled on the first protocol error: only 2 messages are
   // requested, so a server that sends more would otherwise stall the call
-  // until its deadline.
+  // until its deadline. Sending stops first, as gRPC rejects any message sent
+  // to a cancelled call, and that rejection could hide the protocol error.
   private def update(f: UnaryCallState[Res] => UnaryCallState[Res]) = run(Error.emptyMetadata) {
     state.modify { current =>
       val next = f(current)
       val cancel = (current, next) match {
         case (Failure(_), _) => ZIO.unit
-        case (_, Failure(msg)) => call.cancel(msg).ignore
+        case (_, Failure(msg)) => ZIO.succeed(ready.close()) *> call.cancel(msg).ignore
         case _ => ZIO.unit
       }
       (cancel, next)
     }.flatten
   }
 
-  override def onClose(status: Status, trailers: Metadata) = run(trailers) {
-    for {
-      s <- state.get
-      // a protocol error takes precedence over the status
-      result = s match {
-        case Failure(msg) => Left(Status.INTERNAL.withDescription(msg))
-        case _ if !status.isOk => Left(status)
-        case ResponseReceived(headers, message) => Right((headers, message))
-        case _ => Left(Status.INTERNAL.withDescription("No data received"))
-      }
-      exit = result match {
-        case Left(status_) => Exit.failCause(Error.fromStatusAndTrailers(status_, trailers))
-        case Right(value) => Exit.succeed(value)
-      }
-      _ <- promise.done(exit).unit
-    } yield ()
+  override def onClose(status: Status, trailers: Metadata) = {
+    ready.close()
+    run(trailers) {
+      for {
+        s <- state.get
+        // a protocol error takes precedence over the status
+        result = s match {
+          case Failure(msg) => Left(Status.INTERNAL.withDescription(msg))
+          case _ if !status.isOk => Left(status)
+          case ResponseReceived(headers, message) => Right((headers, message))
+          case _ => Left(Status.INTERNAL.withDescription("No data received"))
+        }
+        exit = result match {
+          case Left(status_) => Exit.failCause(Error.fromStatusAndTrailers(status_, trailers))
+          case Right(value) => Exit.succeed(value)
+        }
+        _ <- promise.done(exit).unit
+      } yield ()
+    }
   }
 
   private def run(trailers: Metadata)(effect: => ZIO[Any, Nothing, Unit]): Unit = Unsafe.unsafe { unsafe ?=>

@@ -8,6 +8,7 @@ import io.grpc.MethodDescriptor
 import io.grpc.Status
 import zga.error.Error
 import zio.Chunk
+import zio.Exit
 import zio.Promise
 import zio.ZIO
 import zio.durationInt
@@ -128,6 +129,40 @@ object ClientCallsTest extends ZIOSpecDefault {
           assertErrorIs[Error.PermissionDenied](exit)
         }
       } ::
+      test("stops sending when the server closes the call in an uninterruptible region") {
+        val call = new FakeClientCall[String, String](Nil, Status.PERMISSION_DENIED, respondOnStart = true, initiallyReady = false)
+        for {
+          released <- Promise.make[Nothing, Unit]
+          req = ZStream("a", "b").ensuring(released.succeed(()))
+          headers <- SafeMetadata.make
+          exit <- runUninterruptible {
+            ClientCalls.clientStreaming(channel(call), method, CallOptions.DEFAULT, ZIO.succeed(headers), nameRouting, req)
+          }
+          requestsReleased <- released.isDone
+        } yield {
+          assertErrorIs[Error.PermissionDenied](exit) &&
+          assertTrue(call.sent.isEmpty) &&
+          assertTrue(requestsReleased)
+        }
+      } ::
+      test("neither sends nor half-closes after a protocol error cancels the call") {
+        val call = new FakeClientCall[String, String](List("first", "second"), respondOnStart = true, closeOnCancel = false)
+        for {
+          headers <- SafeMetadata.make
+          // uninterruptible, so that sending has finished when the call returns
+          fiber <- runUninterruptible {
+            ClientCalls.clientStreaming(channel(call), method, CallOptions.DEFAULT, ZIO.succeed(headers), Nil, ZStream("a", "b"))
+          }.fork
+          _ <- ZIO.yieldNow.repeatUntil(_ => call.cancelled.nonEmpty)
+          _ <- ZIO.succeed(call.closeCancelled())
+          exit <- fiber.join
+        } yield {
+          assertErrorIs[Error.Internal](exit) &&
+          assertTrue(call.rejectedCalls == 0) &&
+          assertTrue(call.sent.isEmpty) &&
+          assertTrue(call.halfCloseCalls == 0)
+        }
+      } ::
       test("fails when the request stream fails") {
         val call = new FakeClientCall[String, String](List("response"))
         val req: ZStream[Any, Status, String] = ZStream.fail(Status.ABORTED.withDescription("request stream failed"))
@@ -136,6 +171,18 @@ object ClientCallsTest extends ZIOSpecDefault {
           exit <- ClientCalls
             .clientStreaming(channel(call), method, CallOptions.DEFAULT, ZIO.succeed(headers), Nil, req)
             .exit
+        } yield {
+          assertErrorIs[Error.Aborted](exit)
+        }
+      } ::
+      test("fails when the request stream fails in an uninterruptible region") {
+        val call = new FakeClientCall[String, String](List("response"))
+        val req: ZStream[Any, Status, String] = ZStream.fail(Status.ABORTED.withDescription("request stream failed"))
+        for {
+          headers <- SafeMetadata.make
+          exit <- runUninterruptible {
+            ClientCalls.clientStreaming(channel(call), method, CallOptions.DEFAULT, ZIO.succeed(headers), Nil, req)
+          }
         } yield {
           assertErrorIs[Error.Aborted](exit)
         }
@@ -235,6 +282,22 @@ object ClientCallsTest extends ZIOSpecDefault {
           assertTrue(values == Chunk("first", "second"))
         }
       } ::
+      test("stops sending when the server closes the call in an uninterruptible region") {
+        val call = new FakeClientCall[String, String](List("first", "second"), respondOnStart = true, initiallyReady = false)
+        for {
+          released <- Promise.make[Nothing, Unit]
+          req = ZStream("a", "b").ensuring(released.succeed(()))
+          headers <- SafeMetadata.make
+          exit <- runUninterruptible {
+            ClientCalls.bidirectional(channel(call), method, CallOptions.DEFAULT, ZIO.succeed(headers), nameRouting, req).runCollect
+          }
+          requestsReleased <- released.isDone
+        } yield {
+          assertTrue(exit == Exit.succeed(Chunk("first", "second"))) &&
+          assertTrue(call.sent.isEmpty) &&
+          assertTrue(requestsReleased)
+        }
+      } ::
       test("fails when the request stream fails") {
         val call = new FakeClientCall[String, String](Nil)
         val req: ZStream[Any, Status, String] = ZStream.fail(Status.ABORTED.withDescription("request stream failed"))
@@ -246,6 +309,47 @@ object ClientCallsTest extends ZIOSpecDefault {
             .exit
         } yield {
           assertErrorIs[Error.Aborted](exit)
+        }
+      } ::
+      test("fails when the request stream fails in an uninterruptible region") {
+        val call = new FakeClientCall[String, String](Nil)
+        val req: ZStream[Any, Status, String] = ZStream.fail(Status.ABORTED.withDescription("request stream failed"))
+        for {
+          headers <- SafeMetadata.make
+          exit <- runUninterruptible {
+            ClientCalls.bidirectional(channel(call), method, CallOptions.DEFAULT, ZIO.succeed(headers), Nil, req).runCollect
+          }
+        } yield {
+          assertErrorIs[Error.Aborted](exit)
+        }
+      } ::
+      test("stops sending when the responses are no longer consumed in an uninterruptible region") {
+        val call = new FakeClientCall[String, String](List.tabulate(10)(i => s"response-$i"), respondOnStart = true)
+        val req = ZStream.iterate(0)(_ + 1).map(_.toString)
+        for {
+          headers <- SafeMetadata.make
+          exit <- runUninterruptible {
+            ClientCalls.bidirectional(channel(call), method, CallOptions.DEFAULT, ZIO.succeed(headers), Nil, req).take(1).runCollect
+          }
+        } yield {
+          assertTrue(exit == Exit.succeed(Chunk("response-0"))) &&
+          assertTrue(call.cancelled == List("ZIO Success"))
+        }
+      } ::
+      test("does not interrupt a request when the responses are no longer consumed in an uninterruptible region") {
+        val call = new FakeClientCall[String, String](List.tabulate(10)(i => s"response-$i"), respondOnStart = true)
+        for {
+          pulled <- Promise.make[Nothing, Unit]
+          req = ZStream.fromZIO(ZIO.sleep(300.millis) *> pulled.succeed(()).as("a"))
+          headers <- SafeMetadata.make
+          exit <- runUninterruptible {
+            ClientCalls.bidirectional(channel(call), method, CallOptions.DEFAULT, ZIO.succeed(headers), Nil, req).take(1).runCollect
+          }
+          requestPulled <- pulled.isDone
+        } yield {
+          assertTrue(exit == Exit.succeed(Chunk("response-0"))) &&
+          assertTrue(requestPulled) &&
+          assertTrue(call.sent.isEmpty)
         }
       } ::
       test("sets the routing header from the first request") {

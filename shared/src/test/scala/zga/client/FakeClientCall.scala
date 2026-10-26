@@ -13,13 +13,16 @@ import scala.collection.mutable
  * Responses start once the client half-closes, or straight after `start` when
  * `respondOnStart` is set, which models a server that closes the call without
  * waiting for the requests. Like gRPC, cancelling an open call closes it with
- * `CANCELLED`, and `isReady` gates sending until [[makeReady]].
+ * `CANCELLED`, after which sending or half-closing throws, and `isReady` gates
+ * sending until [[makeReady]]. When `closeOnCancel` is not set, the close is
+ * delayed until [[closeCancelled]], as gRPC delivers it on another thread.
  */
 private final class FakeClientCall[Req, Res](
   responses: List[Res],
   status: Status = Status.OK,
   respondOnStart: Boolean = false,
   initiallyReady: Boolean = true,
+  closeOnCancel: Boolean = true,
 ) extends ClientCall[Req, Res] {
 
   val requests: mutable.ArrayBuffer[Int] = mutable.ArrayBuffer.empty
@@ -28,6 +31,7 @@ private final class FakeClientCall[Req, Res](
   @volatile var readyChecks = 0
   @volatile var startHeaders: Option[Metadata] = None
   @volatile var halfCloseCalls = 0
+  @volatile var rejectedCalls = 0
 
   @volatile private var ready = initiallyReady
   private var listener: ClientCall.Listener[Res] = null
@@ -35,6 +39,7 @@ private final class FakeClientCall[Req, Res](
   private var pending = List.empty[Res]
   private var responding = false
   private var closed = false
+  private var cancelCalled = false
 
   def makeReady(): Unit = synchronized {
     ready = true
@@ -54,13 +59,19 @@ private final class FakeClientCall[Req, Res](
     deliver()
   }
 
+  def closeCancelled(): Unit = synchronized {
+    close(Status.CANCELLED.withDescription(cancelled.last))
+  }
+
   override def cancel(message: String, cause: Throwable) = synchronized {
     cancelled = message :: cancelled
+    cancelCalled = true
     pending = Nil
-    close(Status.CANCELLED.withDescription(message))
+    if (closeOnCancel) close(Status.CANCELLED.withDescription(message))
   }
 
   override def halfClose() = synchronized {
+    rejectIfCancelled()
     halfCloseCalls += 1
     if (!responding) respond()
   }
@@ -71,7 +82,15 @@ private final class FakeClientCall[Req, Res](
   }
 
   override def sendMessage(message: Req) = synchronized {
+    rejectIfCancelled()
     sent = sent :+ message
+  }
+
+  private def rejectIfCancelled() = {
+    if (cancelCalled) {
+      rejectedCalls += 1
+      throw new IllegalStateException("call was cancelled")
+    }
   }
 
   private def respond() = {
@@ -87,7 +106,7 @@ private final class FakeClientCall[Req, Res](
       permits -= 1
       listener.onMessage(head)
     }
-    if (responding && pending.isEmpty) close(status)
+    if (responding && pending.isEmpty && !cancelCalled) close(status)
   }
 
   private def close(status: Status) = {
