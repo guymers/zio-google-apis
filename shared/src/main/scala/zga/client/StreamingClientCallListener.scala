@@ -20,7 +20,6 @@ import zio.stream.ZStream
 
 class StreamingClientCallListener[Res] private[client] (
   runtime: Runtime[Any],
-  ready: ReadySignal,
   queue: Queue[Take[Error, Res]],
 ) extends ClientCall.Listener[Res] {
 
@@ -48,18 +47,20 @@ class StreamingClientCallListener[Res] private[client] (
     }.getOrThrow()
   }
 
-  override def onReady() = ready.signal()
-
-  def stream(using Trace): ZStream[Any, Error, Res] = ZStream.fromQueueWithShutdown(queue).flattenTake
+  private[client] def stream(using Trace): ZStream[Any, Error, Res] = {
+    // unlike `fromQueueWithShutdown`, interruptible even in an uninterruptible region, see `ClientCalls`
+    ZStream
+      .repeatZIOChunk(queue.takeBetween(1, ZStream.DefaultChunkSize).interruptible)
+      .ensuring(queue.shutdown)
+      .flattenTake
+  }
 
 }
 
 object StreamingClientCallListener {
 
-  private[client] def make[Res](
-    ready: ReadySignal,
-  )(using Trace): ZIO[Any, Nothing, StreamingClientCallListener[Res]] = for {
+  private[client] def make[Res](using Trace): ZIO[Any, Nothing, StreamingClientCallListener[Res]] = for {
     runtime <- ZIO.runtime[Any]
     queue <- Queue.unbounded[Take[Error, Res]]
-  } yield new StreamingClientCallListener(runtime, ready, queue)
+  } yield new StreamingClientCallListener(runtime, queue)
 }

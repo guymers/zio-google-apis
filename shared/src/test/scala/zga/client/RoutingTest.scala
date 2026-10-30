@@ -3,6 +3,8 @@ package zga.client
 import io.grpc.Deadline
 import io.grpc.Status
 import zio.Chunk
+import zio.Exit
+import zio.Promise
 import zio.Ref
 import zio.ZIO
 import zio.durationInt
@@ -54,19 +56,19 @@ object RoutingTest extends ZIOSpecDefault {
         val table = template(variable("table_name", literal("projects"), single, literal("instances"), single, multi))
         assertTrue(extract(table, tableName) == List("table_name" -> tableName))
       },
-      test("skips a value that does not match the template") {
+      test("extracts nothing from a value that does not match the template") {
         val table = template(variable("table_name", literal("regions"), single, literal("zones"), single, multi))
         assertTrue(extract(table, tableName).isEmpty)
       },
-      test("extracts part of the value") {
+      test("extracts a prefix of the value") {
         val routing = template(variable("routing_id", literal("projects"), single), multi)
         assertTrue(extract(routing, tableName) == List("routing_id" -> "projects/proj_foo"))
       },
-      test("extracts an unnamed middle segment") {
+      test("extracts a middle segment followed by a double wildcard") {
         val instance = template(literal("projects"), single, variable("instance_id", literal("instances"), single), multi)
         assertTrue(extract(instance, tableName) == List("instance_id" -> "instances/instance_bar"))
       },
-      test("extracts a middle segment") {
+      test("extracts a middle segment followed by literal segments") {
         val location = template(literal("projects"), single, variable("table_location", literal("instances"), single), literal("tables"), single)
         assertTrue(extract(location, tableName) == List("table_location" -> "instances/instance_bar"))
       },
@@ -74,24 +76,24 @@ object RoutingTest extends ZIOSpecDefault {
         val profile = template(literal("profiles"), variable("routing_id", single))
         assertTrue(extract(profile, "profiles/prof_qux") == List("routing_id" -> "prof_qux"))
       },
-      test("a double wildcard matches zero segments") {
+      test("a double wildcard after a variable matches zero segments") {
         val location = template(literal("projects"), single, literal("locations"), variable("location", single), multi)
         assertTrue(extract(location, "projects/p/locations/l") == List("location" -> "l"))
       },
       // AIP-4222: "a path_template like `foo/**` matches all of the following:
       // `foo`, `foo/`, `foo/bar/baz`"
-      test("a final double wildcard matches zero or more segments") {
+      test("a double wildcard inside a variable matches zero or more segments") {
         val foo = template(variable("name", literal("foo"), multi))
         assertTrue(extract(foo, "foo") == List("name" -> "foo")) &&
         assertTrue(extract(foo, "foo/") == List("name" -> "foo/")) &&
         assertTrue(extract(foo, "foo/bar/baz") == List("name" -> "foo/bar/baz"))
       },
-      test("a double wildcard is greedy") {
+      test("extracts several segments before a double wildcard") {
         val instances = template(variable("routing_id", literal("projects"), single, literal("instances"), single), multi)
         assertTrue(extract(instances, tableName) == List("routing_id" -> "projects/proj_foo/instances/instance_bar"))
       },
       // AIP-4222: routing_parameters { field: "parent" path_template: "{project=projects/*}/**" }
-      test("extracts the projects/* part of the AIP-4222 explicit example") {
+      test("extracts the projects/* part of the AIP-4222 example") {
         assertTrue(extract(projectPattern, "projects/100/subprojects/200/foo") == List("project" -> "projects/100")) &&
         assertTrue(extract(projectPattern, "projects/100") == List("project" -> "projects/100"))
       },
@@ -114,7 +116,7 @@ object RoutingTest extends ZIOSpecDefault {
             Routing.requestParams(TopicRequest("projects/100/foo", ""), List(matched)),
         )
       },
-      test("a trailing slash is an empty segment") {
+      test("a trailing slash is an empty segment, which `*` does not match") {
         val project = template(variable("name", literal("projects"), single))
         assertTrue(extract(project, "projects/p/").isEmpty)
       },
@@ -122,7 +124,7 @@ object RoutingTest extends ZIOSpecDefault {
         val trailing = template(variable("routing_id", multi), literal("foo"))
         assertTrue(extract(trailing, "foo").isEmpty)
       },
-      test("a variable still binds the segments it does match") {
+      test("a variable binds the segments before a following literal") {
         val trailing = template(variable("routing_id", multi), literal("foo"))
         assertTrue(extract(trailing, "bar/foo") == List("routing_id" -> "bar"))
       },
@@ -150,7 +152,7 @@ object RoutingTest extends ZIOSpecDefault {
           assertTrue(values == List("custom=1"))
         }
       },
-      test("sets nothing when no parameter matches") {
+      test("sets nothing when the field is empty") {
         for {
           headers <- SafeMetadata.make
           _ <- Routing.setRequestParams(headers, Request(""), nameParameter)
@@ -163,7 +165,7 @@ object RoutingTest extends ZIOSpecDefault {
       // projects/100/subprojects/200/foo, patterns in both first and second
       // routing_parameters will match it, but the second one will 'win' since it
       // is specified 'last'"
-      test("the last parameter wins for a shared header key") {
+      test("the last matching parameter wins for a shared key") {
         val parameters = List(
           Routing.parameter(projectPattern, (request: TopicRequest) => Some(request.parent)),
           Routing.parameter(subprojectPattern, (request: TopicRequest) => Some(request.parent)),
@@ -237,7 +239,7 @@ object RoutingTest extends ZIOSpecDefault {
           assertTrue(sent == Chunk(Request("first")))
         }
       },
-      test("sets nothing for no requests") {
+      test("sets nothing when there are no requests") {
         for {
           headers <- SafeMetadata.make
           sent <- ZIO.scoped(Routing.setFirstRequestParams(ZIO.succeed(headers), ZStream.empty, nameParameter, None).flatMap(_._2.runCollect))
@@ -247,7 +249,7 @@ object RoutingTest extends ZIOSpecDefault {
           assertTrue(sent.isEmpty)
         }
       },
-      test("waits for nothing when there are no parameters") {
+      test("does not pull a request when there are no parameters") {
         for {
           pulled <- Ref.make(0)
           requests = ZStream(Request("first")).tap(_ => pulled.update(_ + 1))
@@ -297,6 +299,32 @@ object RoutingTest extends ZIOSpecDefault {
           assertTrue(sent == Chunk(Request("first")))
         }
       },
+      test("does not wait out the deadline once the first request arrives in an uninterruptible region") {
+        for {
+          headers <- SafeMetadata.make
+          deadline = Some(Deadline.after(1, TimeUnit.MINUTES))
+          exit <- runUninterruptible {
+            ZIO.scoped(Routing.setFirstRequestParams(ZIO.succeed(headers), ZStream(Request("first")), nameParameter, deadline).flatMap(_._2.runCollect))
+          }
+          values = requestParams(headers)
+        } yield {
+          assertTrue(exit == Exit.succeed(Chunk(Request("first")))) &&
+          assertTrue(values == List("name=first"))
+        }
+      },
+      test("does not interrupt pulling the first request when the deadline passes in an uninterruptible region") {
+        for {
+          arrived <- Ref.make(false)
+          requests = ZStream.fromZIO(ZIO.sleep(500.millis) *> arrived.set(true).as(Request("first")))
+          headers <- SafeMetadata.make
+          deadline = Some(Deadline.after(100, TimeUnit.MILLISECONDS))
+          exit <- runUninterruptible(ZIO.scoped(Routing.setFirstRequestParams(ZIO.succeed(headers), requests, nameParameter, deadline)))
+          requestArrived <- arrived.get
+        } yield {
+          assertTrue(exit.causeOption.flatMap(_.failureOption).map(_.getCode).contains(Status.Code.DEADLINE_EXCEEDED)) &&
+          assertTrue(requestArrived)
+        }
+      },
       test("fetches the headers after the first request arrives") {
         for {
           pulled <- Ref.make(0)
@@ -334,8 +362,53 @@ object RoutingTest extends ZIOSpecDefault {
           assertTrue(releasedAfterClose)
         }
       },
+      test("releases the requests with their own failure") {
+        for {
+          released <- Promise.make[Nothing, Exit[Any, Any]]
+          requests = releasedWith(released, ZStream(Request("first")) ++ ZStream.fail(Status.ABORTED))
+          headers <- SafeMetadata.make
+          _ <- ZIO.scoped(Routing.setFirstRequestParams(ZIO.succeed(headers), requests, nameParameter, None).flatMap(_._2.runDrain)).exit
+          exit <- released.await
+        } yield {
+          assertTrue(exit.causeOption.flatMap(_.failureOption).contains(Status.ABORTED))
+        }
+      },
+      test("releases the requests with the failure of their consumer") {
+        for {
+          released <- Promise.make[Nothing, Exit[Any, Any]]
+          requests = releasedWith(released, ZStream(Request("first"), Request("second")))
+          headers <- SafeMetadata.make
+          _ <- ZIO.scoped {
+            Routing.setFirstRequestParams(ZIO.succeed(headers), requests, nameParameter, None).flatMap(_._2.runForeach(_ => ZIO.fail(Status.INTERNAL)))
+          }.exit
+          exit <- released.await
+        } yield {
+          assertTrue(exit.causeOption.flatMap(_.failureOption).contains(Status.INTERNAL))
+        }
+      },
+      test("releases the requests as interrupted when their consumer is interrupted") {
+        for {
+          released <- Promise.make[Nothing, Exit[Any, Any]]
+          requests = releasedWith(released, ZStream(Request("first"), Request("second")))
+          headers <- SafeMetadata.make
+          running <- Promise.make[Nothing, Unit]
+          fiber <- ZIO.scoped {
+            Routing.setFirstRequestParams(ZIO.succeed(headers), requests, nameParameter, None).flatMap(_._2.runForeach(_ => running.succeed(()) *> ZIO.never))
+          }.fork
+          _ <- running.await
+          _ <- fiber.interrupt
+          exit <- released.await
+        } yield {
+          assertTrue(exit.isInterrupted)
+        }
+      },
     ),
   ) @@ TestAspect.timeout(15.seconds)
+
+  // `requests`, recording in `released` the `Exit` their finaliser runs with
+  private def releasedWith[A](released: Promise[Nothing, Exit[Any, Any]], requests: ZStream[Any, Status, A]) = {
+    ZStream.acquireReleaseExitWith(ZIO.unit)((_, exit) => released.succeed(exit)) *> requests
+  }
 
   private def requestParams(headers: SafeMetadata) = {
     Option(headers.metadata.getAll(Routing.RequestParamsKey)).fold(List.empty[String])(_.asScala.toList)
