@@ -13,8 +13,7 @@ object StreamingClientCallListenerTest extends ZIOSpecDefault {
   override val spec = suite("StreamingClientCallListener")(
     test("ignores callbacks after its stream is shut down") {
       for {
-        ready <- ReadySignal.make
-        listener <- StreamingClientCallListener.make[String](ready)
+        listener <- StreamingClientCallListener.make[String]
         _ <- ZIO.succeed(listener.onMessage("first"))
         // ending the stream early shuts its queue down
         _ <- listener.stream.take(1).runDrain

@@ -15,7 +15,7 @@ import zio.ZIO
 
 // ported from `zio_grpc` v0.6.3, with two intentional differences:
 // - a successful call yields only its response message, dropping the response headers and trailers that upstream carries in `ResponseContext`
-// - a protocol error takes precedence over the call status, which would otherwise be the `CANCELLED` caused by cancelling on that error
+// - a protocol error fails the call straight away, rather than cancelling it and waiting for the `CANCELLED` status
 // https://github.com/scalapb/zio-grpc/blob/v0.6.3/core/src/main/scalajvm/scalapb/zio_grpc/client/UnaryClientCallListener.scala
 
 sealed trait UnaryCallState[+Res]
@@ -28,8 +28,6 @@ object UnaryCallState {
 
 class UnaryClientCallListener[Res] private[client] (
   runtime: Runtime[Any],
-  call: ZClientCall[?, Res],
-  ready: ReadySignal,
   state: Ref[UnaryCallState[Res]],
   promise: Promise[Error, (Metadata, Res)],
 ) extends ClientCall.Listener[Res] {
@@ -49,27 +47,25 @@ class UnaryClientCallListener[Res] private[client] (
     case f @ Failure(_) => f
   }
 
-  // The call is cancelled on the first protocol error: only 2 messages are
-  // requested, so a server that sends more would otherwise stall the call
-  // until its deadline.
+  // Fail on the first protocol error, as only 2 messages are requested and the
+  // call would otherwise stall until its deadline. Ending the call cancels it.
   private def update(f: UnaryCallState[Res] => UnaryCallState[Res]) = run(Error.emptyMetadata) {
     state.modify { current =>
       val next = f(current)
-      val cancel = (current, next) match {
+      val fail = (current, next) match {
         case (Failure(_), _) => ZIO.unit
-        case (_, Failure(msg)) => call.cancel(msg).ignore
+        case (_, Failure(msg)) => promise.failCause(Error.fromStatusAndTrailers(Status.INTERNAL.withDescription(msg), Error.emptyMetadata)).unit
         case _ => ZIO.unit
       }
-      (cancel, next)
+      (fail, next)
     }.flatten
   }
 
+  // does nothing after a protocol error, as that has already failed the call
   override def onClose(status: Status, trailers: Metadata) = run(trailers) {
     for {
       s <- state.get
-      // a protocol error takes precedence over the status
       result = s match {
-        case Failure(msg) => Left(Status.INTERNAL.withDescription(msg))
         case _ if !status.isOk => Left(status)
         case ResponseReceived(headers, message) => Right((headers, message))
         case _ => Left(Status.INTERNAL.withDescription("No data received"))
@@ -90,19 +86,14 @@ class UnaryClientCallListener[Res] private[client] (
     }.getOrThrow()
   }
 
-  override def onReady() = ready.signal()
-
-  def result(using Trace): ZIO[Any, Error, (Metadata, Res)] = promise.await
+  private[client] def result(using Trace): ZIO[Any, Error, (Metadata, Res)] = promise.await
 }
 
 object UnaryClientCallListener {
 
-  private[client] def make[Res](
-    call: ZClientCall[?, Res],
-    ready: ReadySignal,
-  )(using Trace): ZIO[Any, Nothing, UnaryClientCallListener[Res]] = for {
+  private[client] def make[Res](using Trace): ZIO[Any, Nothing, UnaryClientCallListener[Res]] = for {
     runtime <- ZIO.runtime[Any]
     state <- Ref.make[UnaryCallState[Res]](UnaryCallState.Initial)
     promise <- Promise.make[Error, (Metadata, Res)]
-  } yield new UnaryClientCallListener[Res](runtime, call, ready, state, promise)
+  } yield new UnaryClientCallListener[Res](runtime, state, promise)
 }

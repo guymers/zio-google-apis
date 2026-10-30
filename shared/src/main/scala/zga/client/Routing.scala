@@ -6,7 +6,6 @@ import io.grpc.Status
 import zio.Chunk
 import zio.Clock
 import zio.Duration
-import zio.Exit
 import zio.Scope
 import zio.Trace
 import zio.ZIO
@@ -66,7 +65,9 @@ object Routing {
    * that credentials are not held during the wait. gRPC cannot enforce
    * `deadline` on a call that has not been made yet, so this wait enforces it
    * instead, in real time as gRPC does: if the first request has not arrived by
-   * then, it fails with `DEADLINE_EXCEEDED`.
+   * then, it fails with `DEADLINE_EXCEEDED`. In an uninterruptible region,
+   * `requests` is not interrupted, so it fails once the first request arrives,
+   * or the requests end, and never if they wait forever.
    *
    * The returned stream matches `requests`. Its resources are released when it
    * ends, or when the enclosing scope closes if it is not run to the end.
@@ -95,7 +96,7 @@ object Routing {
           case None => ZStream.empty
           case Some(chunk) => ZStream.fromChunk(chunk) ++ ZStream.repeatZIOChunkOption(pull)
         }
-        metadata -> stream.ensuring(scope.close(Exit.unit))
+        metadata -> stream.ensuringWith(scope.close(_))
       }
     }
   }
@@ -109,9 +110,10 @@ object Routing {
 
   private val FirstRequestDeadlineExceeded = Status.DEADLINE_EXCEEDED.withDescription("deadline exceeded waiting for the first request")
 
-  // the live clock, as the deadline is measured in real time, even when a test clock is in use
+  // the live clock, as the deadline is measured in real time, even when a test clock is in use,
+  // and interruptible even in an uninterruptible region, so the sleep stops once the first request arrives
   private def deadlineExceeded(deadline: Deadline)(using Trace) = {
-    Clock.ClockLive.sleep(remaining(deadline)) *> ZIO.fail(FirstRequestDeadlineExceeded)
+    Clock.ClockLive.sleep(remaining(deadline)).interruptible *> ZIO.fail(FirstRequestDeadlineExceeded)
   }
 
   private def remaining(deadline: Deadline) = Duration.fromNanos(deadline.timeRemaining(TimeUnit.NANOSECONDS).max(0L))
