@@ -3,22 +3,25 @@ package zga.client
 import io.grpc.ClientCall
 import io.grpc.Metadata
 import io.grpc.Status
+import zga.client.FakeClientCall.RespondOn
 
 import scala.collection.mutable
 
 /**
- * A `ClientCall` that models response-side flow control: a response is only
- * delivered once it has been requested.
+ * A `ClientCall` whose server sends `responses` and then closes the call with
+ * `status`. Like gRPC, a response is only delivered once it has been requested.
  *
- * Responses start once the client half-closes, or straight after `start` when
- * `respondOnStart` is set, which models a server that closes the call without
- * waiting for the requests. Like gRPC, cancelling an open call closes it with
- * `CANCELLED`, and `isReady` gates sending until [[makeReady]].
+ * The server responds when `respondOn` says, see [[FakeClientCall.RespondOn]].
+ *
+ * Also like gRPC:
+ *   - `isReady` returns `initiallyReady` until [[makeReady]] calls `onReady`
+ *   - cancelling closes the call with `CANCELLED`, after which `sendMessage`
+ *     and `halfClose` throw, counted in `rejectedCalls`
  */
 private final class FakeClientCall[Req, Res](
   responses: List[Res],
   status: Status = Status.OK,
-  respondOnStart: Boolean = false,
+  respondOn: RespondOn = RespondOn.HalfClose,
   initiallyReady: Boolean = true,
 ) extends ClientCall[Req, Res] {
 
@@ -28,6 +31,7 @@ private final class FakeClientCall[Req, Res](
   @volatile var readyChecks = 0
   @volatile var startHeaders: Option[Metadata] = None
   @volatile var halfCloseCalls = 0
+  @volatile var rejectedCalls = 0
 
   @volatile private var ready = initiallyReady
   private var listener: ClientCall.Listener[Res] = null
@@ -45,7 +49,7 @@ private final class FakeClientCall[Req, Res](
     listener = responseListener
     startHeaders = Option(headers)
     responseListener.onHeaders(new Metadata)
-    if (respondOnStart) respond()
+    if (respondOn == RespondOn.Start) respond()
   }
 
   override def request(numMessages: Int) = synchronized {
@@ -61,6 +65,7 @@ private final class FakeClientCall[Req, Res](
   }
 
   override def halfClose() = synchronized {
+    rejectIfCancelled()
     halfCloseCalls += 1
     if (!responding) respond()
   }
@@ -71,7 +76,16 @@ private final class FakeClientCall[Req, Res](
   }
 
   override def sendMessage(message: Req) = synchronized {
+    if (respondOn == RespondOn.FirstSend && !responding) respond()
+    rejectIfCancelled()
     sent = sent :+ message
+  }
+
+  private def rejectIfCancelled() = {
+    if (cancelled.nonEmpty) {
+      rejectedCalls += 1
+      throw new IllegalStateException("call was cancelled")
+    }
   }
 
   private def respond() = {
@@ -95,5 +109,17 @@ private final class FakeClientCall[Req, Res](
       closed = true
       listener.onClose(status, new Metadata)
     }
+  }
+}
+
+private object FakeClientCall {
+
+  /**
+   * When the server sends its responses and closes the call.
+   */
+  enum RespondOn {
+    case HalfClose
+    case Start
+    case FirstSend
   }
 }
