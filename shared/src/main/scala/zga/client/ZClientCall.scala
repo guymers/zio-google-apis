@@ -31,7 +31,7 @@ class ZClientCallImpl[Req, Res](private val call: ClientCall[Req, Res]) extends 
 object ZClientCall {
   def apply[Req, Res](call: ClientCall[Req, Res]): ZClientCall[Req, Res] = new ZClientCallImpl(call)
 
-  class ForwardingZClientCall[Req, Res](
+  open class ForwardingZClientCall[Req, Res](
     protected val delegate: ZClientCall[Req, Res],
   ) extends ZClientCall[Req, Res] {
     override def start(listener: Listener[Res], headers: SafeMetadata)(using Trace) = delegate.start(listener, headers)

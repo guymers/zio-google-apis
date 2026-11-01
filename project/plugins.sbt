@@ -8,4 +8,4 @@ addSbtPlugin("com.github.sbt" % "sbt-ci-release" % "1.12.1")
 addSbtPlugin("com.github.sbt" % "sbt-dynver" % "5.1.1")
 addSbtPlugin("com.typesafe" % "sbt-mima-plugin" % "1.2.1")
 
-//addSbtPlugin("com.timushev.sbt" % "sbt-updates" % "0.7.0")
+//addSbtPlugin("com.timushev.sbt" % "sbt-updates" % "0.7.1")

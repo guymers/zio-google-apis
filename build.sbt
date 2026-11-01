@@ -1,12 +1,12 @@
 // format: off
 
 val grpcVersion = "1.83.1"
-val googleCommonProtosVersion = "2.78.0"
-val googleOauth2HttpVersion = "1.54.0"
-val logbackVersion = "1.6.5"
-val nettyVersion = "4.2.18.Final"
+val googleCommonProtosVersion = "2.79.0"
+val googleOauth2HttpVersion = "1.55.0"
+val logbackVersion = "1.6.6"
+val nettyVersion = "4.2.19.Final"
 val protobufVersion = "4.36.2"
-val zioVersion = "2.1.26"
+val zioVersion = "2.1.27"
 
 organization := "io.github.guymers"
 homepage := Some(uri("https://github.com/guymers/zio-google-apis"))
@@ -20,7 +20,7 @@ scmInfo := Some(ScmInfo(
   Some("scm:git:git@github.com:guymers/zio-google-apis.git"),
 ))
 
-scalaVersion := "3.3.8"
+scalaVersion := "3.3.9"
 versionScheme := Some("early-semver")
 
 scalacOptions ++= Seq(
@@ -105,7 +105,7 @@ lazy val benchmark = project.in(file("benchmark"))
   .settings(noPublishSettings)
   .settings(Seq(
     libraryDependencies ++= Seq(
-      "com.google.api-ads" % "google-ads-stubs-v26" % "48.0.0",
+      "com.google.api-ads" % "google-ads-stubs-v26" % "48.1.0",
     ),
   ))
   .dependsOn(ads)
@@ -317,7 +317,7 @@ lazy val iam = project.in(file("deps/iam"))
   .settings(Seq(
     libraryDependencies ++= Seq(
       "dev.zio" %% "zio" % zioVersion,
-      "com.google.api.grpc" % "proto-google-iam-v1" % "1.73.0" % ProtobufConfig.name,
+      "com.google.api.grpc" % "proto-google-iam-v1" % "1.74.0" % ProtobufConfig.name,
     ),
   ))
   .settings(compileExternalProtoFiles(_ / "google" / "iam"))
