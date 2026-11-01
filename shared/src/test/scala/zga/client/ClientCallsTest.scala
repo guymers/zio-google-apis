@@ -2,6 +2,7 @@ package zga.client
 
 import io.grpc.CallOptions
 import io.grpc.ClientCall
+import io.grpc.Deadline
 import io.grpc.ManagedChannel
 import io.grpc.Metadata
 import io.grpc.MethodDescriptor
@@ -231,6 +232,20 @@ object ClientCallsTest extends ZIOSpecDefault {
         } yield {
           assertTrue(call.startHeaders.exists(_.get(Routing.RequestParamsKey) == "name=a")) &&
           assertTrue(call.sent == List("a", "b"))
+        }
+      } ::
+      test("fails with the deadline when the first request does not arrive") {
+        val call = new FakeClientCall[String, String](List("response"))
+        val options = CallOptions.DEFAULT.withDeadline(Deadline.after(100, TimeUnit.MILLISECONDS))
+        for {
+          headers <- SafeMetadata.make
+          exit <- ClientCalls
+            .clientStreaming(channel(call), method, options, ZIO.succeed(headers), nameRouting, ZStream.never)
+            .exit
+        } yield {
+          assertErrorIs[Error.DeadlineExceeded](exit) &&
+          assertTrue(call.startHeaders.isEmpty) &&
+          assertTrue(call.cancelled.isEmpty)
         }
       } :: Nil
     },

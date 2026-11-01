@@ -66,8 +66,9 @@ object Routing {
    * `deadline` on a call that has not been made yet, so this wait enforces it
    * instead, in real time as gRPC does: if the first request has not arrived by
    * then, it fails with `DEADLINE_EXCEEDED`. In an uninterruptible region,
-   * `requests` is not interrupted, so it fails once the first request arrives,
-   * or the requests end, and never if they wait forever.
+   * `requests` is not interrupted, so once the deadline has passed it fails
+   * only when the first request arrives, or the requests end, and never if they
+   * wait forever.
    *
    * The returned stream matches `requests`. Its resources are released when it
    * ends, or when the enclosing scope closes if it is not run to the end.

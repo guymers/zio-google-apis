@@ -48,7 +48,8 @@ class UnaryClientCallListener[Res] private[client] (
   }
 
   // Fail on the first protocol error, as only 2 messages are requested and the
-  // call would otherwise stall until its deadline. Ending the call cancels it.
+  // call would otherwise stall until its deadline. `ClientCalls` cancels the
+  // call when its scope closes after this failure.
   private def update(f: UnaryCallState[Res] => UnaryCallState[Res]) = run(Error.emptyMetadata) {
     state.modify { current =>
       val next = f(current)
@@ -61,7 +62,7 @@ class UnaryClientCallListener[Res] private[client] (
     }.flatten
   }
 
-  // does nothing after a protocol error, as that has already failed the call
+  // has no effect after a protocol error, as that has already failed the call
   override def onClose(status: Status, trailers: Metadata) = run(trailers) {
     for {
       s <- state.get

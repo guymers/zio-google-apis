@@ -13,8 +13,8 @@ import java.util.concurrent.atomic.AtomicReference
 
 /**
  * The request side of a call: sends messages as the call becomes ready, instead
- * of letting gRPC buffer every message it is given, and stops sending once the
- * call has closed.
+ * of letting gRPC buffer every message it is given, and does not start sending
+ * once the call has closed.
  *
  * `onReady` and `onClose` are called on a gRPC transport thread, so the signal
  * is a [[java.util.concurrent.CompletableFuture]] that the callbacks complete
@@ -45,7 +45,8 @@ private[client] final class RequestSender[Req] private (
 
   /**
    * Waits until the call can accept `message` without buffering it, then sends
-   * it. Returns whether the call is still open.
+   * it. Returns whether the call is still open. Fails with a `Status` if the
+   * call cannot be queried or sent to.
    */
   def send(message: Req)(using Trace): ZIO[Any, Status, Boolean] = {
     ZIO.ifZIO(awaitReady)(whileOpen(call.sendMessage(message)) *> isClosed.negate, ZIO.succeed(false))

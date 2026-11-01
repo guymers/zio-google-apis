@@ -5,6 +5,7 @@ import io.grpc.Metadata
 import io.grpc.Status
 import zio.Promise
 import zio.Runtime
+import zio.Trace
 import zio.Unsafe
 import zio.ZIO
 import zio.durationInt
@@ -51,6 +52,32 @@ object RequestSenderTest extends ZIOSpecDefault {
       } yield {
         assertTrue(!open) &&
         assertTrue(call.sent.isEmpty)
+      }
+    },
+    test("stops sending after a send that was in flight when the call closed") {
+      val call = new FakeClientCall[String, String](Nil)
+      for {
+        entered <- Promise.make[Nothing, Unit]
+        release <- Promise.make[Nothing, Unit]
+        zcall = new ZClientCall.ForwardingZClientCall[String, String](ZClientCall(call)) {
+          override def sendMessage(message: String)(using Trace) =
+            entered.succeed(()) *> release.await *> super.sendMessage(message)
+        }
+        sender <- RequestSender.make(zcall)
+        headers <- SafeMetadata.make
+        listener = sender.listener(new ClientCall.Listener[String] {})
+        _ <- zcall.start(listener, headers)
+        first <- sender.send("a").fork
+        _ <- entered.await
+        // the close races with the send that is already in flight
+        _ <- ZIO.succeed(listener.onClose(Status.OK, new Metadata))
+        _ <- release.succeed(())
+        open <- first.join
+        secondOpen <- sender.send("b")
+      } yield {
+        assertTrue(!open) &&
+        assertTrue(!secondOpen) &&
+        assertTrue(call.sent == List("a"))
       }
     },
   ) @@ TestAspect.timeout(15.seconds)

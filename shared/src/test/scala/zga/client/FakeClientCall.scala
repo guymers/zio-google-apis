@@ -76,9 +76,9 @@ private final class FakeClientCall[Req, Res](
   }
 
   override def sendMessage(message: Req) = synchronized {
-    if (respondOn == RespondOn.FirstSend && !responding) respond()
     rejectIfCancelled()
     sent = sent :+ message
+    if (respondOn == RespondOn.FirstSend && !responding) respond()
   }
 
   private def rejectIfCancelled() = {

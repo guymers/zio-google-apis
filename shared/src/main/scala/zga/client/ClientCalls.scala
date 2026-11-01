@@ -123,7 +123,8 @@ object ClientCalls {
   }
 
   // Starts the call, then sends the requests and half-closes it.
-  // Everything is interruptible except pulling a request.
+  // Everything is interruptible; pulling a request keeps the call's
+  // interruptibility.
   private def sendRequests[R, Req, Res](
     call: ZClientCall[Req, Res],
     listener: ClientCall.Listener[Res],
@@ -144,8 +145,8 @@ object ClientCalls {
 
   // Sends the requests until they end or the call closes, without pulling
   // another request once it has closed. The requests are pulled rather than
-  // run, as running a stream forks a fiber that the interruption cannot reach.
-  // `restore` gives pulling the interruptibility of the call.
+  // run, so that `restore` applies to pulling alone, leaving sending
+  // interruptible. `restore` gives pulling the interruptibility of the call.
   private def sendAll[R, Req](
     sender: RequestSender[Req],
     restore: ZIO.InterruptibilityRestorer,
