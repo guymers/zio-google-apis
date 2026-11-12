@@ -138,7 +138,11 @@ object Error {
     details: Chunk[RpcStatus.Details],
     unparseableDetails: Chunk[(zga.google.protobuf.Any, Throwable)],
     trailers: Metadata = emptyMetadata,
-  ) extends Error(Status.Code.FAILED_PRECONDITION)
+  ) extends Error(Status.Code.FAILED_PRECONDITION) {
+    val violations = details.collect {
+      case f: RpcStatus.Details.PreconditionFailure => f.violations
+    }.flatten
+  }
 
   /**
    * @see

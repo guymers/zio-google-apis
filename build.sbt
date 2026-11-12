@@ -1,10 +1,10 @@
 // format: off
 
 val grpcVersion = "1.83.1"
-val googleCommonProtosVersion = "2.79.0"
-val googleOauth2HttpVersion = "1.55.0"
+val googleCommonProtosVersion = "2.81.0"
+val googleOauth2HttpVersion = "1.57.0"
 val logbackVersion = "1.6.6"
-val nettyVersion = "4.2.19.Final"
+val nettyVersion = "4.2.20.Final"
 val protobufVersion = "4.36.2"
 val zioVersion = "2.1.27"
 
@@ -105,7 +105,7 @@ lazy val benchmark = project.in(file("benchmark"))
   .settings(noPublishSettings)
   .settings(Seq(
     libraryDependencies ++= Seq(
-      "com.google.api-ads" % "google-ads-stubs-v26" % "48.1.0",
+      "com.google.api-ads" % "google-ads-stubs-v26" % "48.2.0",
     ),
   ))
   .dependsOn(ads)
@@ -317,7 +317,7 @@ lazy val iam = project.in(file("deps/iam"))
   .settings(Seq(
     libraryDependencies ++= Seq(
       "dev.zio" %% "zio" % zioVersion,
-      "com.google.api.grpc" % "proto-google-iam-v1" % "1.74.0" % ProtobufConfig.name,
+      "com.google.api.grpc" % "proto-google-iam-v1" % "1.76.0" % ProtobufConfig.name,
     ),
   ))
   .settings(compileExternalProtoFiles(_ / "google" / "iam"))
